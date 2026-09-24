@@ -1,5 +1,7 @@
 # A2Ahub
 
+![A2Ahub by SweetingTech — Your agents. One conversation. An orange-lit command center connects distinct agent cores around a central control hub.](design/a2ahub-banner.png)
+
 A local shared chat workspace for you and your A2A agents. Built with React, Vite, and Node/Express.
 
 [GitHub repository](https://github.com/SweetingTech/A2Ahub)
