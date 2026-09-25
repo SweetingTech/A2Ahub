@@ -81,6 +81,11 @@ function App() {
     const previous = document.activeElement;
     document.querySelector("#endpoint")?.focus();
     const trap = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setModal(false);
+        return;
+      }
       if (e.key !== "Tab") return;
       const nodes = [
         ...document.querySelectorAll(
@@ -89,7 +94,10 @@ function App() {
       ];
       const first = nodes[0],
         last = nodes.at(-1);
-      if (e.shiftKey && document.activeElement === first) {
+      if (!nodes.includes(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first)?.focus();
+      } else if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {

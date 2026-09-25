@@ -12,6 +12,7 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - `server/chat.js`: concurrent group-chat workers, bounded discussion bursts, Continue, and Stop.
 - `server/protocol.js`: A2A discovery, version-specific wire formats, streaming, polling, and cancellation.
 - `test/protocol.test.js`: isolated local mock agents and integration tests.
+- `test/chat.test.js`: scheduler tests for concurrency, request limits, audience boundaries, Continue, and Stop.
 
 ## Behavioral constraints
 
@@ -46,6 +47,10 @@ npm run build
 The default app port is 4317. Integration tests use port 4318 and disposable directories under `work/`; tests must not touch the user's real workspace data or require paid models. Check for existing listeners before starting another server; do not terminate unrelated processes.
 
 Run tests relevant to changes and a production build before handoff. Add meaningful regression coverage when changing protocol, persistence, limits, or cancellation. For UI changes, verify actual desktop and mobile behavior, accessibility, connection errors, and browser console health. Preserve the design documented in `design/QA.md` unless the requested change calls for redesign.
+
+For group-chat UI verification, use delayed local mock agents and a disposable `A2AHUB_DATA_DIR` on an unused loopback port. Exercise concurrent replies, human interjections, the six-request cap, Continue, Stop from another tab, cleared queues, and Resume without new requests. Check desktop and narrow mobile layouts, membership after reload, and the mobile connection inspector. Keep screenshots and temporary browser scripts outside tracked source.
+
+Preserve keyboard access to the connection dialog after failed discovery: disabling the submit button can move focus to the document body. Escape must still dismiss the dialog, Tab and Shift+Tab must recover focus inside it, and closing must restore focus to the opener. Record expected failed-request console entries separately from unexpected runtime errors.
 
 Use Prettier for changed source files. Keep the README's setup, supported protocol scope, and limitations accurate. Report mock-only coverage separately from live-agent verification. Do not perform live paid integration tests unless the task authorizes them.
 

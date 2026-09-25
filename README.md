@@ -67,6 +67,10 @@ On 2026-09-24, a live Hermes endpoint advertised **LilDSweetz**, JSON-RPC **1.0*
 
 The concurrent group-chat update has 16 automated tests covering overlapping agents, human interjections, per-agent serialization, the six-request cap, Continue, Stop across active bursts, ignored late results, offline/input-required agents, per-agent timeouts, audience boundaries, context catch-up, A2A 1.0/0.3 transport, origin protection, and server-restart persistence. Tests use local mocks and disposable data under `work/`, with no paid model calls. The group behavior has not been verified against multiple live model agents.
 
+On 2026-09-25, Playwright with Edge verified the production UI at desktop (1536 × 1024) and mobile (390 × 844) sizes using two delayed local mock agents and disposable workspace data. Checks covered concurrent replies, messages sent during replies, the six-request cap, Continue, cross-tab Stop, cancellation and queue clearing, idle Resume, membership after reload, connection errors, and mobile navigation. A failed connection could leave keyboard focus outside the dialog; Escape now closes it and Tab restores focus inside. There were no JavaScript runtime errors; the console reported a missing favicon and the expected HTTP 400 for the deliberately invalid endpoint. All 16 tests and the production build passed. See [design/QA.md](design/QA.md) for details.
+
+No live model request was sent during this verification: the live smoke-test command was blocked by automatic approval review. The earlier single-agent Hermes result above does not verify concurrent discussion with multiple live agents.
+
 ## Project structure
 
 - `src/`: React chat interface and responsive styles.
