@@ -8,20 +8,22 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 
 - `src/main.jsx`: chat, recipient selection, agent registration, and connection inspection.
 - `src/style.css`: responsive interface styles.
-- `server/index.js`: API, event stream, atomic JSON persistence, and bounded runs.
+- `server/index.js`: API, event stream, room settings, and atomic JSON persistence.
+- `server/chat.js`: concurrent group-chat workers, bounded discussion bursts, Continue, and Stop.
 - `server/protocol.js`: A2A discovery, version-specific wire formats, streaming, polling, and cancellation.
 - `test/protocol.test.js`: isolated local mock agents and integration tests.
 
 ## Behavioral constraints
 
 - Keep the server bound to loopback and preserve host/origin validation. Public hosting or multi-user access requires a separately designed authentication boundary.
-- Keep direct messages the default. Send only to explicitly selected recipients.
-- Agent relay must be opt-in, require at least two recipients, and retain a server-enforced maximum of six total replies per run. Preserve Stop, timeout handling, and one active run across tabs.
+- Group chat is the default for new rooms. Send only to explicitly selected room members. Preserve the option to disable peer-triggered replies.
+- Each human message or explicit Continue starts a bounded discussion burst of at most six Hub requests. Dispatch different agents concurrently, serialize each agent’s context, and keep the composer usable while they respond. Only one room may have active agents across tabs.
+- Stop agents pauses the entire room and clears all queued requests. Continue may explicitly resume a bounded discussion; Resume agents alone must never start work. Human messages supersede queued autonomous chatter.
 - Do not automatically retry, replay interrupted work, or start recurring/background agent conversations. Avoid unnecessary paid calls.
-- Stop must halt future turns and attempt remote task cancellation when a task ID is known. Never claim local abort guarantees that remote model/tool execution stopped.
+- Stop must halt future calls and attempt remote task cancellation for every active request whose task ID is known. Never claim local abort guarantees that remote model/tool execution stopped.
 - Do not imply request limits guarantee a dollar budget or constrain an agent's internal tool use.
 - Preserve A2A 1.0 and 0.3 JSON-RPC differences: methods, role/part formats, wrappers, task states, and tenant routing. Do not blindly resend a request using a different protocol after a failure; it could duplicate paid work.
-- Keep per-room, per-agent contexts distinct. A shared local transcript is not permission to broadcast the full history.
+- Keep per-room, per-agent contexts distinct. Persist audience IDs and delivery markers; never expose old messages to newly added members or forward private-mode replies as shared history.
 - Tools without an A2A endpoint need an adapter. A Codex task is not itself an A2A server.
 
 ## Credentials and persistence

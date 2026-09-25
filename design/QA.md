@@ -25,3 +25,13 @@ Browser interaction evidence:
 - Final browser console had no app warnings/errors; production build passed.
 
 Automated tests separately verified successful registration, two mock-agent relay, reply cap, cancellation, recipient validation, legacy format and server-restart persistence. Only one real agent was available; a live two-agent relay has not been tested.
+
+## Concurrent group chat update (2026-09-25)
+
+The earlier screenshots and interaction evidence above describe the original sequential version. They are not visual verification of this update.
+
+Changes: persistent room membership; concurrent agent replies; an always-usable composer during replies; peer-message delivery; Continue, Stop agents, and Resume agents controls; visible reply allowance; wrapped controls for narrow screens.
+
+Verification: `npm test` passed all 16 mock/protocol/integration tests, `npm run build` passed, and `git diff --check` passed. Coverage includes overlapping workers, human interjections, per-agent context ordering, six-request caps, Continue, all-agent cancellation, late replies, offline and input-required agents, timeouts, membership boundaries, missed peer-message catch-up, legacy workspace migration, persistence, and both supported A2A wire formats.
+
+Browser validation was attempted against the disposable local app at `http://127.0.0.1:4317`. The available cloud browser rejected navigation with `net::ERR_BLOCKED_BY_CLIENT`. No desktop/mobile rendering, console-health, or UI-interaction pass is claimed for this update. Live multi-agent testing remains for the user's home environment. No paid model calls were made.
