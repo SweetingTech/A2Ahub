@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discover, send, cancel } from "./protocol.js";
+import { GroupChat } from "./chat.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.A2AHUB_DATA_DIR || path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -13,6 +14,10 @@ const room = () => ({
   title: "Shared workspace",
   messages: [],
   contexts: {},
+  agentIds: [],
+  agentChat: true,
+  replyLimit: 6,
+  paused: false,
   createdAt: new Date().toISOString(),
 });
 let db = fs.existsSync(file)
@@ -29,6 +34,13 @@ let db = fs.existsSync(file)
       rooms: [room()],
     };
 for (const a of db.agents) a.status = "unchecked";
+for (const r of db.rooms) {
+  // Existing rooms gain explicit membership without exposing old transcripts.
+  r.agentIds ??= [];
+  r.agentChat ??= false;
+  r.replyLimit ??= 6;
+  r.paused ??= false;
+}
 for (const r of db.rooms)
   for (const m of r.messages)
     if (["working", "submitted"].includes(m.state)) {
@@ -40,23 +52,10 @@ function save() {
   fs.renameSync(file + ".tmp", file);
 }
 save();
-const runs = new Map(),
-  clients = new Set();
+const clients = new Set();
+const chat = new GroupChat({ send, cancel, publish, redact: safeError });
 function snapshot() {
-  return {
-    ...db,
-    runs: [...runs.values()].map(
-      ({ id, roomId, state, turn, maxTurns, agentId, stopNote }) => ({
-        id,
-        roomId,
-        state,
-        turn,
-        maxTurns,
-        agentId,
-        stopNote,
-      }),
-    ),
-  };
+  return { ...db, runs: chat.snapshot() };
 }
 function publish() {
   save();
@@ -130,176 +129,94 @@ app.post("/api/agents/:id/check", async (req, res) => {
   publish();
   res.json(a);
 });
-app.delete("/api/agents/:id", (req, res) => {
+function getRoom(id) {
+  const r = db.rooms.find((r) => r.id === id);
+  if (!r) throw new Error("Conversation not found.");
+  return r;
+}
+function validateMembers(ids, allowEmpty = false) {
   if (
-    [...runs.values()].some(
-      (r) =>
-        ["running", "stopping"].includes(r.state) &&
-        r.agentIds.includes(req.params.id),
-    )
+    !Array.isArray(ids) ||
+    (!allowEmpty && !ids.length) ||
+    ids.length > 6 ||
+    new Set(ids).size !== ids.length
   )
+    throw new Error("Choose up to six distinct agents for this chat.");
+  const agents = ids.map((id) => db.agents.find((a) => a.id === id));
+  if (agents.some((a) => !a)) throw new Error("Agent not found.");
+  return agents;
+}
+app.patch("/api/rooms/:id", (req, res) => {
+  const r = getRoom(req.params.id);
+  if (chat.active(r.id).length)
+    throw new Error(
+      "Stop agents before changing chat membership or reply settings.",
+    );
+  const {
+    agentIds = r.agentIds,
+    agentChat = r.agentChat,
+    replyLimit = r.replyLimit,
+  } = req.body;
+  validateMembers(agentIds, true);
+  if (
+    typeof agentChat !== "boolean" ||
+    !Number.isInteger(replyLimit) ||
+    replyLimit < Math.max(1, agentIds.length) ||
+    replyLimit > 6
+  )
+    throw new Error(
+      "Reply allowance must cover each member and be no more than six.",
+    );
+  Object.assign(r, { agentIds, agentChat, replyLimit });
+  publish();
+  res.json(r);
+});
+app.delete("/api/agents/:id", (req, res) => {
+  if (chat.active().some((r) => r.agentIds.includes(req.params.id)))
     throw new Error("Stop the active conversation before removing this agent.");
   db.agents = db.agents.filter((a) => a.id !== req.params.id);
+  for (const r of db.rooms)
+    r.agentIds = r.agentIds.filter((id) => id !== req.params.id);
   publish();
   res.json({ ok: true });
 });
-async function stopRun(run, reason = "Stopped by you") {
-  if (run.state !== "running") return;
-  run.state = "stopping";
-  run.stopNote = reason;
+app.post("/api/rooms/:id/stop", async (req, res) => {
+  await chat.stop(getRoom(req.params.id));
+  res.json({ ok: true });
+});
+app.post("/api/rooms/:id/resume", (req, res) => {
+  const r = getRoom(req.params.id);
+  if (chat.active(r.id).length)
+    throw new Error("Wait for agents to stop first.");
+  r.paused = false;
   publish();
-  const remote =
-    run.taskId && run.agentId
-      ? db.agents.find((a) => a.id === run.agentId)
-      : null;
-  run.controller.abort();
-  let canceled = false;
-  if (remote)
-    try {
-      canceled = await cancel(remote, run.taskId);
-    } catch {}
-  run.stopNote =
-    reason +
-    ". " +
-    (canceled
-      ? "Remote task cancellation accepted."
-      : "Further turns stopped. Remote work may continue; cancellation was not confirmed.");
-  run.state = "stopped";
-  publish();
-}
+  res.json({ ok: true });
+});
+app.post("/api/rooms/:id/continue", (req, res) => {
+  const r = getRoom(req.params.id);
+  if (chat.active().length)
+    throw new Error(
+      "Wait for the current discussion to finish or stop agents first.",
+    );
+  const agents = validateMembers(r.agentIds);
+  const run = chat.start(r, agents, null);
+  res.status(202).json({ id: run.id });
+});
 app.post("/api/runs/:id/stop", async (req, res) => {
-  const r = runs.get(req.params.id);
-  if (!r) return res.sendStatus(404);
-  await stopRun(r);
+  const run = chat.runs.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "Discussion not found." });
+  await chat.stop(getRoom(run.roomId));
   res.json({ ok: true });
 });
 app.post("/api/runs", (req, res) => {
-  const { roomId, agentIds, text, relay, maxTurns } = req.body;
-  const r = db.rooms.find((r) => r.id === roomId);
-  if (!r) throw new Error("Conversation not found.");
-  if ([...runs.values()].some((x) => ["running", "stopping"].includes(x.state)))
-    throw new Error(
-      "A conversation is already running. Stop it or wait for it to finish.",
-    );
+  const { roomId, text } = req.body;
+  const r = getRoom(roomId);
   if (typeof text !== "string" || !text.trim() || text.length > 12000)
     throw new Error("Enter a message of 1–12,000 characters.");
-  if (
-    !Array.isArray(agentIds) ||
-    !agentIds.length ||
-    agentIds.length > 6 ||
-    new Set(agentIds).size !== agentIds.length
-  )
-    throw new Error("Choose 1–6 distinct recipients.");
-  const agents = agentIds.map((id) => db.agents.find((a) => a.id === id));
-  if (agents.some((a) => !a || a.status !== "connected"))
-    throw new Error("Check the selected agents’ connections first.");
-  if (
-    relay &&
-    (agents.length < 2 ||
-      !Number.isInteger(maxTurns) ||
-      maxTurns < 2 ||
-      maxTurns > 6)
-  )
-    throw new Error(
-      "Agent conversations need at least 2 agents and a limit of 2–6 total replies.",
-    );
-  const run = {
-    id: randomUUID(),
-    roomId,
-    agentIds,
-    state: "running",
-    turn: 0,
-    maxTurns: relay ? maxTurns : agents.length,
-    controller: new AbortController(),
-  };
-  runs.set(run.id, run);
-  r.messages.push({
-    id: randomUUID(),
-    role: "user",
-    name: "You",
-    text: text.trim(),
-    recipients: agents.map((a) => a.name),
-    createdAt: new Date().toISOString(),
-    state: "sent",
-  });
-  if (r.messages.length === 1) r.title = text.trim().slice(0, 45);
-  publish();
+  const agents = validateMembers(r.agentIds);
+  const run = chat.start(r, agents, text.trim());
   res.status(202).json({ id: run.id });
-  void execute(run, r, agents, text.trim(), !!relay);
 });
-async function execute(run, r, agents, original, relay) {
-  let previous = "";
-  try {
-    for (let i = 0; i < run.maxTurns; i++) {
-      if (run.state !== "running") break;
-      const a = agents[i % agents.length];
-      run.turn = i + 1;
-      run.agentId = a.id;
-      run.taskId = null;
-      const m = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: a.id,
-        name: a.name,
-        text: "",
-        state: "working",
-        createdAt: new Date().toISOString(),
-        turn: i + 1,
-      };
-      r.messages.push(m);
-      publish();
-      const prompt = relay
-        ? `Shared conversation. This is turn ${i + 1} of at most ${run.maxTurns}. Reply directly and concisely. Do not independently contact other agents or start background work.\nUser: ${original}${previous ? `\nPrevious agent (${agents[(i - 1) % agents.length].name}): ${previous.slice(0, 16000)}` : ""}`
-        : original;
-      const timeout = setTimeout(
-        () => void stopRun(run, "Response timed out after 180 seconds"),
-        180000,
-      );
-      try {
-        const result = await send(
-          a,
-          prompt,
-          r.contexts[a.id],
-          run.controller.signal,
-          (delta) => {
-            if (run.state !== "running") return;
-            Object.assign(m, delta, { text: safeError(delta.text, a) });
-            run.taskId = delta.taskId;
-            publish();
-          },
-        );
-        Object.assign(m, result, { text: safeError(result.text, a) });
-        r.contexts[a.id] = {
-          contextId: result.contextId,
-          ...(result.state === "input-required"
-            ? { taskId: result.taskId }
-            : {}),
-        };
-        previous = m.text;
-        publish();
-        if (result.state !== "completed") {
-          run.state = result.state;
-          break;
-        }
-      } catch (e) {
-        m.state = run.controller.signal.aborted ? "stopped" : "error";
-        m.text =
-          m.text ||
-          (run.controller.signal.aborted
-            ? "Request stopped."
-            : safeError(e.message, a));
-        if (!run.controller.signal.aborted) run.state = "error";
-        publish();
-        break;
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-  } finally {
-    if (run.state === "running") run.state = "completed";
-    publish();
-  }
-}
 function safeError(message, a) {
   const token = a?.tokenEnv && process.env[a.tokenEnv];
   return token ? message.replaceAll(token, "[redacted]") : message;

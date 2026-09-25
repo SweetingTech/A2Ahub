@@ -6,7 +6,7 @@ A local shared chat workspace for you and your A2A agents. Built with React, Vit
 
 [GitHub repository](https://github.com/SweetingTech/A2Ahub)
 
-Select who receives each message, keep a persistent local transcript, and run bounded conversations between agents with a visible Stop control. No hosted service or model subscription is required by the Hub itself; connected agents may incur their own costs.
+Create a group chat with selected agents, keep a persistent local transcript, and let members reply concurrently. Continue advances the discussion; Stop agents pauses everyone. No hosted service or model subscription is required by the Hub itself; connected agents may incur their own costs.
 
 ## Run
 
@@ -28,18 +28,22 @@ Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a backgr
 
 ## Use
 
-1. A local Hermes endpoint is seeded at `http://127.0.0.1:9900/`, initially labeled LilDSweetz. Discovery updates the name from the agent card. Remove this entry if you use a different agent. A2Ahub does not install Hermes or change its messaging settings.
-2. **Connect agent** discovers an endpoint's `.well-known/agent-card.json`, validates its JSON-RPC interface, and shows connection status. On narrow screens, open the menu and click an agent to inspect or recheck it.
-3. Select recipient chips beside **To:**. In direct mode each selected agent receives the same user message once; replies are collected sequentially. Other agents receive nothing.
-4. Enter a message and click **Send message**, or use Ctrl+Enter. Each agent has its own remote context within the room. The shared local transcript does not automatically broadcast all room messages to every agent.
-5. For relay, enable **Agent conversation**, select at least two agents, and choose **2–6 total replies**. The Hub rotates in selection order, forwarding the original request plus the previous agent's reply (up to 16,000 characters). This counts total replies, not rounds per agent.
-6. **Stop** halts further turns, aborts the local request, and requests A2A task cancellation if a remote task ID is known. The result indicates whether cancellation was accepted. Already-started model/tool work may continue. Each reply also has a 180-second timeout.
+1. **New conversation** starts an empty group chat. **Connect agent** discovers an A2A endpoint; use the **In this chat** chips to add or remove registered agents. Membership is saved per conversation. Stop active agents before changing members or reply settings.
+2. Type and **Send message** (Ctrl+Enter also works). Every member receives it through A2A immediately unless that member is already processing an earlier message. Each agent has its own queue and room context, so a slow agent does not block the others. Replies stream independently into the same chat.
+3. Keep talking while agents reply. New human messages take priority over queued autonomous chatter. An individual agent finishes its current request before handling the next human message, preserving its context. Already submitted human messages remain queued until handled or stopped.
+4. **Agents reply to each other** is enabled in new rooms. Completed replies can trigger other members, with queued messages coalesced into one call. Turn it off for independent replies only to you. Each human message permits up to the visible **Replies** allowance, including the initial replies, with a hard maximum of six Hub requests. The allowance must cover all members. There is no fixed speaking order.
+5. **Continue** starts another bounded stretch on the current topic, using the recent discussion. It also resumes a paused room. You do not need to manufacture another user message. Continue is available when the current discussion has settled or been stopped.
+6. **Stop agents** pauses the whole room, drops queued requests, aborts every local in-flight request, and attempts cancellation of each known remote A2A task. Late responses cannot revive the chat. Already-started remote model/tool work may continue if cancellation cannot be confirmed. **Resume agents** removes the pause without starting work, letting you redirect the topic with a new message.
 
-Only one run is active across browser tabs. No automatic retries, recurring jobs, or unbounded loops are created. A task failure or request for user input stops relay. Input-required tasks can be continued with a new addressed message.
+One room can have active agents at a time, consistently across browser tabs. Up to ten human-message bursts can be outstanding in that room; each is independently bounded. A 180-second timeout applies to each request. An unavailable, failed, or input-required agent does not block the other members. Input-required tasks are continued only by a later human message. There are no automatic retries, recurring jobs, or automatic restarts after reload.
+
+Only selected members receive conversation content. Adding an agent does not send it old history. Continue requires that every current member has received the current topic; send a new message after adding someone. Up to six recent, previously unseen peer messages are included on an agent's next authorized call, including replies that finished at the allowance limit. Each included message is capped at 16,000 characters. Only completed shared replies are forwarded; private-mode replies and streaming fragments are not broadcast.
+
+The seeded local Hermes registration is `http://127.0.0.1:9900/`, initially labeled LilDSweetz. Discovery updates the name. Remove it if unused. A2Ahub does not install Hermes, launch agent processes, or change their messaging settings. Every member still needs a running A2A endpoint.
 
 ## Persistence and credentials
 
-Registrations, per-agent context IDs, messages, task IDs, and message states are saved atomically in `data/workspace.json`. Rooms survive reloads and server restarts. In-flight replies are marked interrupted after restart and never replayed automatically. Runtime run counters are not retained. Data is plaintext on this computer; this is a single-user local application.
+Registrations, room membership, reply settings, pause state, per-agent context IDs, messages, delivery markers, task IDs, and message states are saved atomically in `data/workspace.json`. Rooms survive reloads and server restarts. In-flight replies are marked interrupted after restart and never replayed automatically. Runtime request queues and run counters are not retained. Existing workspace files are migrated additively: registrations and transcripts are retained, old rooms receive an empty member list and peer replies remain off until enabled. New rooms start with peer replies enabled and a six-reply allowance. No old transcript is sent as part of migration. Data is plaintext on this computer; this is a single-user local application.
 
 Bearer tokens remain in server environment variables. The form accepts only the variable name, which must begin `A2AHUB_TOKEN_`. Set the real value privately in the environment used to start Node; never paste it into chat or an endpoint URL. Restart the server after environment changes. The app does not read or modify Hermes configuration. Registrations store the variable name, never its value. Redirects and cross-origin advertised endpoints are rejected to avoid forwarding credentials unexpectedly.
 
@@ -51,7 +55,7 @@ Bearer tokens remain in server environment variables. The form accepts only the 
 - A2A **0.3 JSON-RPC**: `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, legacy role/kind fields. Verified with local fixtures; only Hermes 1.0 was tested against a real agent.
 - SSE task progress and artifact updates appear in chat. Agents may stream status changes and only a final answer, rather than individual tokens. Non-streaming tasks use progress feedback and polling.
 - Text only in this version. No file uploads, rich artifact rendering, OAuth, gRPC/REST transport, or inbound agent-initiated conversations. Those require an adapter or client extension.
-- Turn limits constrain **Hub requests**, not internal agent tool calls, model tokens, or dollar spending. Configure spending/tool controls in the agents themselves. Relay prompts ask agents not to delegate independently; that is not a remotely enforceable sandbox.
+- Reply allowances constrain **Hub requests**, not internal agent tool calls, model tokens, or dollar spending. Configure spending/tool controls in the agents themselves. Group-chat prompts ask agents not to delegate independently; that is not a remotely enforceable sandbox.
 - **This Codex task is not an A2A server.** Hermes cannot spontaneously message it. Tools without an A2A endpoint need a separate adapter.
 - Hermes has its own context turn cap. If it rejects a long context, start a new conversation; A2Ahub does not change the setting.
 
@@ -61,14 +65,17 @@ Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`,
 
 On 2026-09-24, a live Hermes endpoint advertised **LilDSweetz**, JSON-RPC **1.0**, streaming. One short request through the rendered UI returned **“A2Ahub connected”**. Local chat data is excluded from this repository.
 
-Four passing test suites cover streaming/artifact append, legacy messages, endpoint validation, bounded relay, recipient validation, cancellation, cross-origin rejection, and server-restart persistence. Tests make no paid calls and use port 4318 with temporary data under `work/`.
+The concurrent group-chat update has 16 automated tests covering overlapping agents, human interjections, per-agent serialization, the six-request cap, Continue, Stop across active bursts, ignored late results, offline/input-required agents, per-agent timeouts, audience boundaries, context catch-up, A2A 1.0/0.3 transport, origin protection, and server-restart persistence. Tests use local mocks and disposable data under `work/`, with no paid model calls. The group behavior has not been verified against multiple live model agents.
 
-The Codex in-app browser verified the live flow, failure feedback, suggestions, relay validation, connection checks, desktop and mobile navigation. See `design/QA.md` for comparison notes. `design/concept.png` is the design reference; `design/desktop.png` and `design/mobile.png` are final captures.
+On 2026-09-25, Playwright with Edge verified the production UI at desktop (1536 × 1024) and mobile (390 × 844) sizes using two delayed local mock agents and disposable workspace data. Checks covered concurrent replies, messages sent during replies, the six-request cap, Continue, cross-tab Stop, cancellation and queue clearing, idle Resume, membership after reload, connection errors, and mobile navigation. A failed connection could leave keyboard focus outside the dialog; Escape now closes it and Tab restores focus inside. There were no JavaScript runtime errors; the console reported a missing favicon and the expected HTTP 400 for the deliberately invalid endpoint. All 16 tests and the production build passed. See [design/QA.md](design/QA.md) for details.
+
+No live model request was sent during this verification: the live smoke-test command was blocked by automatic approval review. The earlier single-agent Hermes result above does not verify concurrent discussion with multiple live agents.
 
 ## Project structure
 
 - `src/`: React chat interface and responsive styles.
-- `server/index.js`: local HTTP API, persistence, run limits, and cancellation.
+- `server/index.js`: local HTTP API, room settings, and persistence.
+- `server/chat.js`: concurrent workers, bounded discussions, Continue, interruption, and cancellation.
 - `server/protocol.js`: agent discovery and A2A JSON-RPC transport.
 - `test/`: protocol fixtures and server integration tests.
 - `design/`: original concept, reference screenshots, and visual verification notes.

@@ -1007,3 +1007,49 @@ summary {
     font-size: 12px;
   }
 }
+
+.discussion-controls {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.discussion-controls .stop {
+  margin-left: 0;
+  min-width: 0;
+  border-color: #d7a08e;
+  color: #a43f27;
+}
+.composer-footer {
+  flex-wrap: wrap;
+}
+.run-status {
+  flex-wrap: wrap;
+}
+.run-status.paused {
+  color: #a43f27;
+}
+.message.system .avatar {
+  display: none;
+}
+.message.system .message-text {
+  color: #778190;
+  font-size: 12px;
+}
+@media (max-width: 700px) {
+  header {
+    flex-wrap: wrap;
+  }
+  header > div:not(.discussion-controls) {
+    min-width: 0;
+    flex: 1;
+  }
+  .discussion-controls {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .discussion-controls button {
+    font-size: 12px;
+    padding: 8px 12px;
+  }
+}

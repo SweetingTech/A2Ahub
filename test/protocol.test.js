@@ -138,12 +138,28 @@ test("Reject credentials and unsupported URL schemes", () => {
   assert.throws(() => endpoint("file:///x"));
   assert.throws(() => endpoint("http://user:secret@localhost/"));
 });
-test("Hub enforces turn limits, explicit selection, stop, origin protection and persistent history", async () => {
+test("Hub persists group membership, bounds discussion, continues, stops all bursts, and protects origins", async () => {
   const a = await mock(),
     b = await mock(),
     slow = await mock("1.0", true);
   const dir = path.resolve("work/test-" + Date.now());
   fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "workspace.json"),
+    JSON.stringify({
+      agents: [],
+      rooms: [
+        {
+          id: "legacy-room",
+          title: "Old history",
+          contexts: {},
+          messages: [
+            { id: "old", role: "agent", text: "Partial", state: "working" },
+          ],
+        },
+      ],
+    }),
+  );
   let child;
   const base = "http://127.0.0.1:4318";
   async function start() {
@@ -160,9 +176,9 @@ test("Hub enforces turn limits, explicit selection, stop, origin protection and 
     throw new Error("Test server did not start");
   }
   const get = () => fetch(base + "/api/state").then((r) => r.json());
-  const post = async (p, data) => {
+  const post = async (p, data, method = "POST") => {
     const r = await fetch(base + "/api" + p, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
@@ -179,57 +195,88 @@ test("Hub enforces turn limits, explicit selection, stop, origin protection and 
   }
   try {
     await start();
+    const legacy = (await get()).rooms[0];
+    assert.deepEqual(legacy.agentIds, []);
+    assert.equal(legacy.agentChat, false);
+    assert.equal(legacy.messages[0].state, "interrupted");
+    assert.match(legacy.messages[0].text, /Partial/);
     const aa = (await post("/agents", { url: a.url })).body,
       bb = (await post("/agents", { url: b.url })).body,
       ss = (await post("/agents", { url: slow.url })).body;
     const room = (await post("/rooms", {})).body;
     assert.equal(
       (
-        await post("/runs", {
-          roomId: room.id,
-          agentIds: [aa.id, bb.id],
-          text: "Test",
-          relay: true,
-          maxTurns: 7,
-        })
+        await post(
+          `/rooms/${room.id}`,
+          { agentIds: [aa.id, bb.id], replyLimit: 7 },
+          "PATCH",
+        )
       ).status,
       400,
     );
     assert.equal(
-      (await post("/runs", { roomId: room.id, agentIds: [], text: "Test" }))
-        .status,
+      (await post("/runs", { roomId: room.id, text: "Test" })).status,
       400,
     );
-    const run = (
-      await post("/runs", {
-        roomId: room.id,
-        agentIds: [aa.id, bb.id],
-        text: "Test relay",
-        relay: true,
-        maxTurns: 3,
-      })
-    ).body;
+    assert.equal(
+      (
+        await post(
+          `/rooms/${room.id}`,
+          { agentIds: [aa.id, bb.id], replyLimit: 3 },
+          "PATCH",
+        )
+      ).status,
+      200,
+    );
+    const run = (await post("/runs", { roomId: room.id, text: "Test group" }))
+      .body;
     const end = await settled(run.id);
     assert.equal(end.rooms.find((r) => r.id === room.id).messages.length, 4);
-    assert.equal(a.calls.length, 2);
-    assert.equal(b.calls.length, 1);
-    assert.match(b.calls[0].params.message.parts[0].text, /Previous agent/);
-    const run2 = (
-      await post("/runs", {
-        roomId: room.id,
-        agentIds: [ss.id, aa.id],
-        text: "Stop test",
-        relay: true,
-        maxTurns: 6,
-      })
-    ).body;
+    assert.equal(a.calls.length + b.calls.length, 3);
+    assert.match(a.calls[0].params.message.parts[0].text, /Test group/);
+    assert.match(b.calls[0].params.message.parts[0].text, /Test group/);
+    assert.ok(
+      [...a.calls, ...b.calls].some((c) =>
+        c.params.message.parts[0].text.includes("Hello world"),
+      ),
+    );
+    const continued = (await post(`/rooms/${room.id}/continue`, {})).body;
+    await settled(continued.id);
+    assert.equal(a.calls.length + b.calls.length, 6);
+    assert.ok(
+      [...a.calls, ...b.calls].some((c) =>
+        c.params.message.parts[0].text.includes("human clicked Continue"),
+      ),
+    );
+    await post(
+      `/rooms/${room.id}`,
+      { agentIds: [ss.id, aa.id], replyLimit: 6 },
+      "PATCH",
+    );
+    const run2 = (await post("/runs", { roomId: room.id, text: "Stop test" }))
+      .body;
     for (let i = 0; i < 50 && !slow.calls.length; i++) await sleep(20);
     await sleep(50);
-    await post(`/runs/${run2.id}/stop`, {});
+    const interjection = await post("/runs", {
+      roomId: room.id,
+      text: "Let me jump in",
+    });
+    assert.equal(interjection.status, 202);
+    assert.equal(
+      (await post(`/rooms/${room.id}`, { agentIds: [aa.id] }, "PATCH")).status,
+      400,
+    );
+    await post(`/rooms/${room.id}/stop`, {});
     const stopped = await settled(run2.id);
     assert.equal(stopped.runs.find((r) => r.id === run2.id).state, "stopped");
-    assert.equal(a.calls.length, 2);
+    assert.ok(stopped.rooms.find((r) => r.id === room.id).paused);
     assert.ok(slow.calls.some((c) => c.method === "CancelTask"));
+    assert.equal(
+      (await post("/runs", { roomId: room.id, text: "Paused" })).status,
+      400,
+    );
+    const savedCount = stopped.rooms.find((r) => r.id === room.id).messages
+      .length;
     const forbidden = await fetch(base + "/api/rooms", {
       method: "POST",
       headers: {
@@ -246,10 +293,23 @@ test("Hub enforces turn limits, explicit selection, stop, origin protection and 
     await start();
     assert.equal(
       (await get()).rooms.find((r) => r.id === room.id).messages.length,
-      6,
+      savedCount,
+    );
+    const restored = (await get()).rooms.find((r) => r.id === room.id);
+    assert.deepEqual(restored.agentIds, [ss.id, aa.id]);
+    assert.equal(restored.paused, true);
+    assert.equal((await get()).runs.length, 0);
+    await post(`/rooms/${room.id}/resume`, {});
+    assert.equal(
+      (await get()).rooms.find((r) => r.id === room.id).paused,
+      false,
     );
   } finally {
-    if (child) child.kill();
+    if (child && child.exitCode === null)
+      await new Promise((resolve) => {
+        child.once("exit", resolve);
+        child.kill();
+      });
     a.close();
     b.close();
     slow.close();

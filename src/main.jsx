@@ -29,10 +29,7 @@ async function api(url, body, method = "POST") {
 function App() {
   const [data, setData] = useState(null),
     [roomId, setRoomId] = useState(""),
-    [selected, setSelected] = useState([]),
     [text, setText] = useState(""),
-    [relay, setRelay] = useState(false),
-    [limit, setLimit] = useState(2),
     [modal, setModal] = useState(false),
     [url, setUrl] = useState(""),
     [tokenEnv, setTokenEnv] = useState(""),
@@ -54,7 +51,6 @@ function App() {
       if (!initialized.current) {
         initialized.current = true;
         setRoomId(d.rooms[0]?.id);
-        setSelected(d.agents.length ? [d.agents[0].id] : []);
         setInspected(d.agents[0]?.id || "");
       }
     };
@@ -67,6 +63,16 @@ function App() {
       ["running", "stopping"].includes(r.state),
     ),
     run = [...(data?.runs || [])].reverse().find((r) => r.roomId === room?.id);
+  const selected = room?.agentIds || [],
+    relay = room?.agentChat ?? true,
+    limit = room?.replyLimit || 6,
+    roomRuns = (data?.runs || []).filter(
+      (r) => r.roomId === room?.id && ["running", "stopping"].includes(r.state),
+    ),
+    roomActive = roomRuns.length > 0,
+    otherRoomActive = active && active.roomId !== room?.id,
+    talkingIds = [...new Set(roomRuns.flatMap((r) => r.activeAgentIds))],
+    queuedIds = [...new Set(roomRuns.flatMap((r) => r.queuedAgentIds))];
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
   }, [room?.messages.length, room?.messages.at(-1)?.text]);
@@ -75,6 +81,11 @@ function App() {
     const previous = document.activeElement;
     document.querySelector("#endpoint")?.focus();
     const trap = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setModal(false);
+        return;
+      }
       if (e.key !== "Tab") return;
       const nodes = [
         ...document.querySelectorAll(
@@ -83,7 +94,10 @@ function App() {
       ];
       const first = nodes[0],
         last = nodes.at(-1);
-      if (e.shiftKey && document.activeElement === first) {
+      if (!nodes.includes(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first)?.focus();
+      } else if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
@@ -108,9 +122,15 @@ function App() {
       setBusy(false);
     }
   }
+  function settings(change) {
+    return api(`/rooms/${room.id}`, change, "PATCH");
+  }
   function choose(id) {
-    setSelected((s) =>
-      s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
+    const agentIds = selected.includes(id)
+      ? selected.filter((x) => x !== id)
+      : [...selected, id];
+    action(() =>
+      settings({ agentIds, replyLimit: Math.max(limit, agentIds.length) }),
     );
   }
   async function submit(e) {
@@ -118,10 +138,7 @@ function App() {
     await action(async () => {
       await api("/runs", {
         roomId: room.id,
-        agentIds: selected,
         text,
-        relay,
-        maxTurns: limit,
       });
       setText("");
     });
@@ -130,7 +147,11 @@ function App() {
     e.preventDefault();
     action(async () => {
       const a = await api("/agents", { url, tokenEnv });
-      setSelected((s) => [...s, a.id]);
+      if (!roomActive && selected.length < 6)
+        await settings({
+          agentIds: [...selected, a.id],
+          replyLimit: Math.max(limit, selected.length + 1),
+        });
       setInspected(a.id);
       setModal(false);
       setUrl("");
@@ -235,16 +256,41 @@ function App() {
           </button>
           <div>
             <h1>{room?.title}</h1>
-            <p>A shared space to think together</p>
+            <p>
+              {selected.length} agent{selected.length === 1 ? "" : "s"} in this
+              chat · {room?.paused ? "paused" : "group conversation"}
+            </p>
           </div>
-          <button
-            className="outline stop"
-            disabled={!active || active.state === "stopping"}
-            onClick={() => action(() => api(`/runs/${active.id}/stop`))}
-          >
-            <Square size={14} fill="currentColor" />
-            {active?.state === "stopping" ? "Stopping…" : "Stop"}
-          </button>
+          <div className="discussion-controls">
+            <button
+              className="outline"
+              disabled={
+                busy ||
+                !online ||
+                !!active ||
+                !relay ||
+                !selected.length ||
+                !room?.messages.some((m) => m.role === "user")
+              }
+              onClick={() => action(() => api(`/rooms/${room.id}/continue`))}
+            >
+              Continue
+            </button>
+            <button
+              className="outline stop"
+              disabled={
+                !online ||
+                (room?.paused && !roomActive) ||
+                roomRuns.some((r) => r.state === "stopping")
+              }
+              onClick={() => action(() => api(`/rooms/${room.id}/stop`))}
+            >
+              <Square size={14} fill="currentColor" />
+              {roomRuns.some((r) => r.state === "stopping")
+                ? "Stopping…"
+                : "Stop agents"}
+            </button>
+          </div>
         </header>
         {!online && (
           <div className="banner" role="alert">
@@ -270,9 +316,9 @@ function App() {
               <Share2 size={92} strokeWidth={1.7} />
               <h2>Bring your agents to the table.</h2>
               <p>
-                Choose a recipient and start a conversation.
+                Add agents to this chat and start talking.
                 <br />
-                You stay in control of every turn.
+                They reply together. You can jump in anytime.
               </p>
               <div className="suggestions">
                 {["Introduce yourself", "What can you help with?"].map((t) => (
@@ -331,26 +377,50 @@ function App() {
           )}
         </section>
         <div className="compose-wrap">
-          {run && (
+          {room?.paused ? (
+            <div className="run-status paused" role="status">
+              {run?.stopNote || "Agents paused."} Continue the discussion, or
+              resume to send a new message.
+              <button
+                className="text-button"
+                disabled={busy || roomActive}
+                onClick={() => action(() => api(`/rooms/${room.id}/resume`))}
+              >
+                Resume agents
+              </button>
+            </div>
+          ) : roomActive ? (
             <div className="run-status" role="status">
-              {run.state === "running" ? (
-                <>
-                  <span className="pulse" />
-                  Reply {run.turn} of {run.maxTurns} ·{" "}
-                  {data.agents.find((a) => a.id === run.agentId)?.name}
-                </>
-              ) : (
-                <>
-                  <Check size={14} />
-                  {run.state} · {run.turn} of {run.maxTurns} replies
-                  {run.stopNote && ` · ${run.stopNote}`}
-                </>
-              )}
+              <span className="pulse" />
+              {talkingIds
+                .map((id) => data.agents.find((a) => a.id === id)?.name)
+                .join(", ")}{" "}
+              replying
+              {queuedIds.length > 0 &&
+                ` · ${queuedIds.length} waiting for their current reply`}
+              · You can keep talking
+            </div>
+          ) : run ? (
+            <div className="run-status" role="status">
+              <Check size={14} />
+              {run.state === "completed-with-errors"
+                ? "Discussion finished with delivery issues"
+                : run.state === "stopped"
+                  ? "Discussion stopped"
+                  : "Discussion finished"}
+              {` · ${run.turn}/${run.maxTurns} replies started. `}
+              {relay && "Continue for another stretch."}
+            </div>
+          ) : null}
+          {otherRoomActive && (
+            <div className="run-status">
+              Agents are active in another conversation. Stop them there to
+              start here.
             </div>
           )}
           <form className="composer" onSubmit={submit}>
             <div className="recipients">
-              <span>To:</span>
+              <span>In this chat:</span>
               {data.agents.length ? (
                 data.agents.map((a) => (
                   <button
@@ -358,6 +428,11 @@ function App() {
                     type="button"
                     aria-pressed={selected.includes(a.id)}
                     className={`recipient ${selected.includes(a.id) ? "chosen" : ""}`}
+                    disabled={
+                      busy ||
+                      roomActive ||
+                      (!selected.includes(a.id) && selected.length >= 6)
+                    }
                     onClick={() => choose(a.id)}
                   >
                     <i className={`dot ${a.status}`} />
@@ -385,7 +460,14 @@ function App() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
-                  if (!busy && !active && text.trim() && selected.length)
+                  if (
+                    !busy &&
+                    online &&
+                    !otherRoomActive &&
+                    !room?.paused &&
+                    text.trim() &&
+                    selected.length
+                  )
                     e.currentTarget.form.requestSubmit();
                 }
               }}
@@ -395,28 +477,36 @@ function App() {
                 <input
                   type="checkbox"
                   checked={relay}
-                  onChange={(e) => setRelay(e.target.checked)}
+                  disabled={busy || roomActive}
+                  onChange={(e) =>
+                    action(() => settings({ agentChat: e.target.checked }))
+                  }
                 />
                 <span className="switch" />
-                Agent conversation
+                Agents reply to each other
               </label>
               <label className="turns">
-                Max turns{" "}
+                Replies{" "}
                 <input
-                  aria-label="Max turns"
+                  aria-label="Reply allowance"
                   type="number"
-                  min="2"
+                  min={Math.max(1, selected.length)}
                   max="6"
                   value={limit}
-                  disabled={!relay}
-                  onChange={(e) => setLimit(Number(e.target.value))}
+                  disabled={!relay || busy || roomActive}
+                  onChange={(e) =>
+                    action(() =>
+                      settings({ replyLimit: Number(e.target.value) }),
+                    )
+                  }
                 />
               </label>
               <button
                 className="primary send"
                 disabled={
                   busy ||
-                  !!active ||
+                  !!otherRoomActive ||
+                  !!room?.paused ||
                   !online ||
                   !text.trim() ||
                   !selected.length
@@ -428,7 +518,9 @@ function App() {
             </div>
           </form>
           <p className="footnote">
-            Manual by default. Agent conversations always have a turn limit.
+            Each message or Continue allows up to{" "}
+            {relay ? limit : selected.length} replies. Stop agents pauses this
+            chat.
           </p>
         </div>
       </main>
@@ -444,15 +536,16 @@ function App() {
         <div className="mode">
           <MessageCircle size={23} />
           <div>
-            <strong>{relay ? "Agent conversation" : "Direct message"}</strong>
+            <strong>Group chat</strong>
             <p>
               {relay
-                ? `${limit} total replies, rotating through selected agents. Each reply goes to the next agent.`
-                : "Only selected agents receive your message."}
+                ? `Members hear your messages and each other. Up to ${limit} replies per message or Continue, arriving independently.`
+                : "Members reply independently to you. Their replies do not trigger other agents."}
             </p>
-            {relay && selected.length < 2 && (
-              <p className="warning">Select at least two agents.</p>
-            )}
+            <p>
+              Stop agents pauses every member. Continue advances the topic;
+              Resume agents lets you send a new message.
+            </p>
           </div>
         </div>
         <div className="connection">
@@ -490,7 +583,6 @@ function App() {
                   onClick={() =>
                     action(async () => {
                       await api(`/agents/${agent.id}`, null, "DELETE");
-                      setSelected((s) => s.filter((x) => x !== agent.id));
                     })
                   }
                 >
@@ -510,13 +602,14 @@ function App() {
         <details>
           <summary>How this workspace works</summary>
           <p>
-            History is saved on this computer. Agents receive your addressed
-            message and their own conversation context.
+            History and membership are saved on this computer. Only this chat’s
+            members receive new messages. Adding an agent does not share old
+            history.
           </p>
           <p>
-            The turn limit caps Hub requests, not an agent’s internal tool calls
-            or spending. Stop attempts remote cancellation; work already started
-            may continue.
+            The reply allowance caps Hub requests, not an agent’s internal tool
+            calls or spending. Stop attempts remote cancellation; work already
+            started may continue.
           </p>
           <p>
             This Codex task is not an A2A server. Hermes cannot spontaneously
