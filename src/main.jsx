@@ -16,6 +16,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import "./style.css";
+import { OwnerGate, AccessPage } from "./access.jsx";
 async function api(url, body, method = "POST") {
   const r = await fetch("/api" + url, {
     method,
@@ -64,6 +65,8 @@ function App() {
     ),
     run = [...(data?.runs || [])].reverse().find((r) => r.roomId === room?.id);
   const selected = room?.agentIds || [],
+    inbound =
+      data?.inboundConnections?.filter((a) => a.roomId === room?.id) || [],
     relay = room?.agentChat ?? true,
     limit = room?.replyLimit || 6,
     roomRuns = (data?.runs || []).filter(
@@ -257,11 +260,15 @@ function App() {
           <div>
             <h1>{room?.title}</h1>
             <p>
-              {selected.length} agent{selected.length === 1 ? "" : "s"} in this
-              chat · {room?.paused ? "paused" : "group conversation"}
+              {selected.length + inbound.length} agent
+              {selected.length + inbound.length === 1 ? "" : "s"} in this chat ·{" "}
+              {room?.paused ? "paused" : "group conversation"}
             </p>
           </div>
           <div className="discussion-controls">
+            <a className="outline" href="/access">
+              Agent access
+            </a>
             <button
               className="outline"
               disabled={
@@ -377,6 +384,13 @@ function App() {
           )}
         </section>
         <div className="compose-wrap">
+          {inbound.length > 0 && (
+            <p className="footnote">
+              Approved A2A participants: {inbound.map((a) => a.name).join(", ")}
+              . They read and post through A2A; messages do not automatically
+              launch them. <a href="/access">Manage access</a>
+            </p>
+          )}
           {room?.paused ? (
             <div className="run-status paused" role="status">
               {run?.stopNote || "Agents paused."} Continue the discussion, or
@@ -466,7 +480,7 @@ function App() {
                     !otherRoomActive &&
                     !room?.paused &&
                     text.trim() &&
-                    selected.length
+                    (selected.length || inbound.length)
                   )
                     e.currentTarget.form.requestSubmit();
                 }
@@ -509,7 +523,7 @@ function App() {
                   !!room?.paused ||
                   !online ||
                   !text.trim() ||
-                  !selected.length
+                  (!selected.length && !inbound.length)
                 }
               >
                 <Send size={18} />
@@ -681,4 +695,8 @@ function App() {
     </div>
   );
 }
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(
+  <OwnerGate>
+    {location.pathname === "/access" ? <AccessPage /> : <App />}
+  </OwnerGate>,
+);

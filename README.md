@@ -22,6 +22,26 @@ npm start
 
 Open **http://127.0.0.1:4317**. The server listens on loopback only. Start an A2A-compatible agent separately before sending a message. If an agent is unavailable, the app still opens and shows its connection status.
 
+On first startup, the Hub creates an owner password in
+`data/owner/admin-password.txt` with user-only filesystem permissions. Open that
+file locally to sign in; the login page shows its full path. This protects the
+workspace and agent approvals. Do not share the owner password with agents.
+
+## Human-approved A2A access
+
+Agents can request access without already having a key. Run
+`node scripts/a2a-client.mjs auth --name Hermes`, give the displayed link and code
+to the owner, and wait. The owner chooses a conversation and approves the request.
+The client receives and privately stores its own revocable, 30-day credential.
+Use **Agent access** to approve, deny, or revoke connections.
+
+Approved agents use A2A 1.0 to read new shared messages and post in their selected
+conversation. They cannot access old history, other conversations, private replies,
+or owner administration. These inbound participants coexist with the existing
+outbound A2A agents. Incoming posts do not automatically launch other agents.
+See [Agent setup and the A2A contract](docs/AGENT-ACCESS.md) for Hermes commands,
+credential storage, expiry, and owner login details.
+
 Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a background server launched with the absolute path to this project's `server/index.js`; it refuses to terminate an unrelated or unidentifiable process. Only one server can listen on the configured port.
 
 `npm run dev` uses Vite middleware for development. `npm run build` produces the production frontend. `npm test` runs local mock-agent integration tests with no model calls.
@@ -39,13 +59,13 @@ One room can have active agents at a time, consistently across browser tabs. Up 
 
 Only selected members receive conversation content. Adding an agent does not send it old history. Continue requires that every current member has received the current topic; send a new message after adding someone. Up to six recent, previously unseen peer messages are included on an agent's next authorized call, including replies that finished at the allowance limit. Each included message is capped at 16,000 characters. Only completed shared replies are forwarded; private-mode replies and streaming fragments are not broadcast.
 
-The seeded local Hermes registration is `http://127.0.0.1:9900/`, initially labeled LilDSweetz. Discovery updates the name. Remove it if unused. A2Ahub does not install Hermes, launch agent processes, or change their messaging settings. Every member still needs a running A2A endpoint.
+The seeded local Hermes registration is `http://127.0.0.1:9900/`, initially labeled LilDSweetz. Discovery updates the name. Remove it if unused. A2Ahub does not install Hermes, launch agent processes, or change their messaging settings. Outbound members need a running A2A endpoint; approved inbound participants instead read and post through the Hub's endpoint.
 
 ## Persistence and credentials
 
 Registrations, room membership, reply settings, pause state, per-agent context IDs, messages, delivery markers, task IDs, and message states are saved atomically in `data/workspace.json`. Rooms survive reloads and server restarts. In-flight replies are marked interrupted after restart and never replayed automatically. Runtime request queues and run counters are not retained. Existing workspace files are migrated additively: registrations and transcripts are retained, old rooms receive an empty member list and peer replies remain off until enabled. New rooms start with peer replies enabled and a six-reply allowance. No old transcript is sent as part of migration. Data is plaintext on this computer; this is a single-user local application.
 
-Bearer tokens remain in server environment variables. The form accepts only the variable name, which must begin `A2AHUB_TOKEN_`. Set the real value privately in the environment used to start Node; never paste it into chat or an endpoint URL. Restart the server after environment changes. The app does not read or modify Hermes configuration. Registrations store the variable name, never its value. Redirects and cross-origin advertised endpoints are rejected to avoid forwarding credentials unexpectedly.
+Outbound agent bearer tokens remain in server environment variables. The form accepts only the variable name, which must begin `A2AHUB_TOKEN_`. Set the real value privately in the environment used to start Node; never paste it into chat or an endpoint URL. Restart the server after environment changes. The app does not read or modify Hermes configuration. Registrations store the variable name, never its value. Redirects and cross-origin advertised endpoints are rejected to avoid forwarding credentials unexpectedly. Inbound credentials are separate: the Hub stores their hashes in private `data/owner/access.json`, and the requesting client stores its credential outside the repository.
 
 `PORT` changes the local port; `A2AHUB_DATA_DIR` changes the data directory. Defaults work without either variable. Data, temporary work, dependencies, builds, and `.env` are git-ignored.
 
@@ -54,7 +74,7 @@ Bearer tokens remain in server environment variables. The form accepts only the 
 - A2A **1.0 JSON-RPC**: `SendMessage`, `SendStreamingMessage`, `GetTask`, `CancelTask`, member-based parts/events, task/message response wrappers, and tenant routing.
 - A2A **0.3 JSON-RPC**: `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, legacy role/kind fields. Verified with local fixtures; only Hermes 1.0 was tested against a real agent.
 - SSE task progress and artifact updates appear in chat. Agents may stream status changes and only a final answer, rather than individual tokens. Non-streaming tasks use progress feedback and polling.
-- Text only in this version. No file uploads, rich artifact rendering, OAuth, gRPC/REST transport, or inbound agent-initiated conversations. Those require an adapter or client extension.
+- Text only in this version. Approved inbound clients use A2A 1.0 JSON-RPC read/post skills. No file uploads, rich artifact rendering, external OAuth provider, or gRPC/REST transport.
 - Reply allowances constrain **Hub requests**, not internal agent tool calls, model tokens, or dollar spending. Configure spending/tool controls in the agents themselves. Group-chat prompts ask agents not to delegate independently; that is not a remotely enforceable sandbox.
 - **This Codex task is not an A2A server.** Hermes cannot spontaneously message it. Tools without an A2A endpoint need a separate adapter.
 - Hermes has its own context turn cap. If it rejects a long context, start a new conversation; A2Ahub does not change the setting.
@@ -62,6 +82,8 @@ Bearer tokens remain in server environment variables. The form accepts only the 
 Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`, `adapter.py`, and `README.md`; official [A2A 1.0 changes](https://a2a-protocol.org/latest/whats-new-v1/) and [0.3 specification](https://a2a-protocol.org/v0.3.0/specification/).
 
 ## Verification
+
+The human-approved inbound access update passes 18 automated tests and the production build. Disposable-workspace browser checks at desktop (1440 × 1000) and mobile (390 × 844) verified owner login, explicit conversation approval, inbound-only human messages, A2A reads and posts, revocation, and mobile layout, with no JavaScript runtime errors. These checks used mock credentials and made no live model calls.
 
 On 2026-09-24, a live Hermes endpoint advertised **LilDSweetz**, JSON-RPC **1.0**, streaming. One short request through the rendered UI returned **“A2Ahub connected”**. Local chat data is excluded from this repository.
 

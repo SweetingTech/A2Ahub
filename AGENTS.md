@@ -13,6 +13,8 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - `server/protocol.js`: A2A discovery, version-specific wire formats, streaming, polling, and cancellation.
 - `test/protocol.test.js`: isolated local mock agents and integration tests.
 - `test/chat.test.js`: scheduler tests for concurrency, request limits, audience boundaries, Continue, and Stop.
+- `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access.
+- `scripts/a2a-client.mjs`: private device-authorization client and A2A read/post helper.
 
 ## Behavioral constraints
 
@@ -29,7 +31,8 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 
 ## Credentials and persistence
 
-- Keep bearer token values exclusively server-side. The UI may accept environment variable names prefixed `A2AHUB_TOKEN_`, never secret values.
+- Keep outbound bearer token values exclusively server-side. The UI may accept environment variable names prefixed `A2AHUB_TOKEN_`, never secret values. Inbound credentials are issued only after explicit owner approval, stored hashed by the Hub and privately by the client, and never printed. Preserve room and history boundaries, expiry, pause and revocation checks.
+- Owner credentials live under ignored `data/owner` with OS-user-only permissions. Never print the initial password; direct the human to its file. Agent bearer credentials must never authorize owner APIs. Test approval with disposable data and mock passwords; do not approve real access on the human's behalf.
 - Never read, print, commit, or change existing Hermes credentials or messaging configuration as part of routine app work.
 - Do not commit `data/`, `work/`, `.env` files, logs, credentials, dependencies, or built assets. Real conversation history belongs only in local runtime data.
 - Preserve atomic writes to `data/workspace.json`. Document migrations and protect existing registrations/history when changing its shape.

@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discover, send, cancel } from "./protocol.js";
 import { GroupChat } from "./chat.js";
+import { Access } from "./access.js";
+import { mountInbound } from "./inbound.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.A2AHUB_DATA_DIR || path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -55,7 +57,13 @@ save();
 const clients = new Set();
 const chat = new GroupChat({ send, cancel, publish, redact: safeError });
 function snapshot() {
-  return { ...db, runs: chat.snapshot() };
+  return {
+    ...db,
+    runs: chat.snapshot(),
+    inboundConnections: access.db.accounts
+      .filter((a) => !a.revoked && a.expiresAt > Date.now())
+      .map(({ id, name, roomId }) => ({ id, name, roomId })),
+  };
 }
 function publish() {
   save();
@@ -64,6 +72,8 @@ function publish() {
 }
 const app = express();
 const port = Number(process.env.PORT || 4317);
+const origin = `http://127.0.0.1:${port}`;
+const access = new Access(dataDir);
 app.use((req, res, next) => {
   if (!["127.0.0.1", "localhost"].includes(req.hostname))
     return res.status(403).json({ error: "Local access only." });
@@ -80,6 +90,62 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: "64kb" }));
+app.use(["/auth", "/api/access"], (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  res.set("Referrer-Policy", "no-referrer");
+  next();
+});
+app.get("/auth/session", (req, res) =>
+  res.json({
+    authenticated: access.owner(req),
+    passwordLocation: access.passwordFile,
+  }),
+);
+app.post("/auth/login", (req, res) => {
+  const token = access.login(req.body.password, req.socket.remoteAddress);
+  res
+    .set(
+      "Set-Cookie",
+      `a2ahub_owner=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`,
+    )
+    .json({ ok: true });
+});
+app.post("/auth/device", (req, res) =>
+  res
+    .status(201)
+    .json(access.request(req.body.name, origin, req.socket.remoteAddress)),
+);
+app.post("/auth/token", (req, res) =>
+  res.json(access.poll(req.body.device_code)),
+);
+app.use("/auth", (err, req, res, next) =>
+  res.status(err.status || 400).json({ error: err.message }),
+);
+mountInbound(app, { access, db, publish, origin });
+app.use("/api", (req, res, next) => {
+  if (!access.owner(req))
+    return res
+      .status(401)
+      .json({ error: "Sign in as the owner to manage A2Ahub." });
+  next();
+});
+app.get("/api/access", (req, res) => res.json(access.list()));
+app.post("/api/access/:id/decision", (req, res) => {
+  if (typeof req.body.approved !== "boolean")
+    throw new Error("Choose Approve or Deny.");
+  access.decide(
+    req.params.id,
+    db.rooms.find((r) => r.id === req.body.roomId),
+    req.body.approved,
+  );
+  publish();
+  res.json({ ok: true });
+});
+app.delete("/api/access/:id", (req, res) => {
+  access.revoke(req.params.id);
+  publish();
+  res.json({ ok: true });
+});
 app.get("/api/state", (req, res) => res.json(snapshot()));
 app.get("/api/events", (req, res) => {
   res.set({
@@ -213,7 +279,24 @@ app.post("/api/runs", (req, res) => {
   const r = getRoom(roomId);
   if (typeof text !== "string" || !text.trim() || text.length > 12000)
     throw new Error("Enter a message of 1–12,000 characters.");
-  const agents = validateMembers(r.agentIds);
+  const inbound = access.db.accounts.some(
+    (a) => a.roomId === r.id && !a.revoked && a.expiresAt > Date.now(),
+  );
+  const agents = validateMembers(r.agentIds, inbound);
+  if (!agents.length) {
+    if (r.paused) throw new Error("Agents are paused. Resume before sending.");
+    r.messages.push({
+      id: randomUUID(),
+      role: "user",
+      name: "You",
+      text: text.trim(),
+      state: "sent",
+      createdAt: new Date().toISOString(),
+    });
+    if (r.messages.length === 1) r.title = text.trim().slice(0, 45);
+    publish();
+    return res.status(202).json({ id: null });
+  }
   const run = chat.start(r, agents, text.trim());
   res.status(202).json({ id: run.id });
 });

@@ -160,26 +160,42 @@ test("Hub persists group membership, bounds discussion, continues, stops all bur
       ],
     }),
   );
-  let child;
+  let child, ownerCookie;
   const base = "http://127.0.0.1:4318";
   async function start() {
     child = spawn(process.execPath, ["server/index.js"], {
-      env: { ...process.env, PORT: "4318", A2AHUB_DATA_DIR: dir },
+      env: {
+        ...process.env,
+        PORT: "4318",
+        A2AHUB_DATA_DIR: dir,
+        A2AHUB_OWNER_PASSWORD: "test-owner-only",
+      },
       stdio: "ignore",
     });
     for (let i = 0; i < 100; i++) {
       try {
-        if ((await fetch(base + "/api/state")).ok) return;
+        if ((await fetch(base + "/auth/session")).ok) {
+          const login = await fetch(base + "/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: "test-owner-only" }),
+          });
+          ownerCookie = login.headers.get("set-cookie").split(";")[0];
+          return;
+        }
       } catch {}
       await sleep(100);
     }
     throw new Error("Test server did not start");
   }
-  const get = () => fetch(base + "/api/state").then((r) => r.json());
+  const get = () =>
+    fetch(base + "/api/state", { headers: { Cookie: ownerCookie } }).then((r) =>
+      r.json(),
+    );
   const post = async (p, data, method = "POST") => {
     const r = await fetch(base + "/api" + p, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: ownerCookie },
       body: JSON.stringify(data),
     });
     return { status: r.status, body: await r.json() };
