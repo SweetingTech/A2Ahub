@@ -65,6 +65,110 @@ function setup({ timeoutMs = 180000, ignoreAbort = false } = {}) {
   return { chat, calls, cancellations, room, agents, reply };
 }
 
+test("re-added members cannot Continue old topics or receive peer backlog from prior membership", async () => {
+  const h = setup();
+  h.room.messages.push(
+    {
+      id: "old-human",
+      role: "user",
+      text: "Old topic",
+      recipientIds: ["Alpha"],
+    },
+    {
+      id: "old-peer",
+      role: "agent",
+      agentId: "Beta",
+      text: "PRIVATE INTERVAL",
+      shared: true,
+      state: "completed",
+      recipientIds: ["Alpha"],
+    },
+  );
+  h.room.memberSince = { Alpha: 2 };
+  assert.throws(() => h.chat.start(h.room, [h.agents[0]], null), /new message/);
+  h.chat.start(h.room, [h.agents[0]], "New membership topic");
+  assert.ok(!h.calls[0].text.includes("PRIVATE INTERVAL"));
+  assert.ok(h.calls[0].text.includes("New membership topic"));
+  await h.reply(h.calls[0]);
+});
+
+test("human messages use owner profile and preserve an explicit room title", async () => {
+  const h = setup();
+  h.chat.ownerName = () => "DJSweetz";
+  h.room.title = "My team";
+  h.room.customTitle = true;
+  h.chat.start(h.room, [h.agents[0]], "Hello everyone");
+  assert.equal(h.room.messages[0].name, "DJSweetz");
+  assert.equal(h.room.title, "My team");
+  await h.reply(h.calls[0]);
+});
+
+test("manual inbound posts use only the latest human allowance and never wake their author", async () => {
+  const h = setup();
+  const run = h.chat.start(h.room, h.agents.slice(0, 2), "Discuss this");
+  await h.reply(h.calls[0], "");
+  await h.reply(h.calls[1], "");
+  assert.equal(run.state, "completed");
+  for (let i = 0; i < 8; i++) {
+    h.chat.relayPost(h.room, {
+      id: `manual-${i}`,
+      agentId: "Beta",
+      role: "agent",
+      shared: true,
+      recipientIds: ["Alpha", "Beta"],
+      text: "A follow-up",
+      name: "Beta",
+    });
+    if (h.calls.at(-1).agent.id === "Alpha") await h.reply(h.calls.at(-1), "");
+  }
+  assert.equal(h.calls.length, 6);
+  assert.ok(h.calls.slice(2).every((c) => c.agent.id === "Alpha"));
+  assert.equal(run.used, 6);
+});
+
+test("manual posts cannot start a conversation or resume a paused one", async () => {
+  const h = setup();
+  const message = {
+    id: "manual",
+    agentId: "Beta",
+    role: "agent",
+    shared: true,
+    recipientIds: ["Alpha"],
+    text: "Hi",
+  };
+  h.chat.relayPost(h.room, message);
+  assert.equal(h.calls.length, 0);
+  h.chat.start(h.room, h.agents.slice(0, 2), "Topic");
+  await h.chat.stop(h.room);
+  h.chat.relayPost(h.room, message);
+  assert.equal(h.calls.length, 2);
+});
+
+test("Stop seals a settled allowance so Resume and a late post cannot restart it", async () => {
+  const h = setup();
+  const run = h.chat.start(h.room, h.agents.slice(0, 2), "Topic");
+  await h.reply(h.calls[0], "");
+  await h.reply(h.calls[1], "");
+  assert.equal(run.state, "completed");
+  assert.equal(run.used, 2);
+  await h.chat.stop(h.room);
+  h.room.paused = false;
+  h.chat.relayPost(h.room, {
+    id: "late-manual",
+    agentId: "Beta",
+    role: "agent",
+    shared: true,
+    recipientIds: ["Alpha"],
+    text: "Late reply",
+  });
+  await tick();
+  assert.equal(h.calls.length, 2);
+  assert.equal(run.allowPeers, false);
+  h.chat.start(h.room, h.agents.slice(0, 2), "New explicit topic");
+  assert.equal(h.calls.length, 4);
+  await h.chat.stop(h.room);
+});
+
 test("members start concurrently; fast replies reach peers without waiting for the slowest", async () => {
   const h = setup();
   const run = h.chat.start(h.room, h.agents, "Round table this");

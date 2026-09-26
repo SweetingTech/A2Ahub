@@ -7,6 +7,8 @@ async function request(url, body, method = "POST") {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await res.json();
+  if (res.status === 401 && url.startsWith("/api/"))
+    window.dispatchEvent(new Event("a2ahub-auth-required"));
   if (!res.ok) throw new Error(data.error || "Request failed");
   return data;
 }
@@ -14,11 +16,32 @@ async function request(url, body, method = "POST") {
 export function OwnerGate({ children }) {
   const [session, setSession] = useState(null),
     [error, setError] = useState(""),
-    [password, setPassword] = useState("");
+    [password, setPassword] = useState(""),
+    [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(true);
+  async function loadSession() {
+    setLoading(true);
+    try {
+      setSession(await request("/auth/session", null, "GET"));
+    } catch (e) {
+      setError(
+        e.message ||
+          "Cannot reach A2Ahub. Check that the local server is running.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
   useEffect(() => {
-    request("/auth/session", null, "GET")
-      .then(setSession)
-      .catch((e) => setError(e.message));
+    loadSession();
+    const expired = () => {
+      setSession(null);
+      setPassword("");
+      setError("");
+      loadSession();
+    };
+    window.addEventListener("a2ahub-auth-required", expired);
+    return () => window.removeEventListener("a2ahub-auth-required", expired);
   }, []);
   if (session?.authenticated) return children;
   return (
@@ -26,6 +49,18 @@ export function OwnerGate({ children }) {
       <section className="access-card">
         <h1>A2Ahub owner sign-in</h1>
         <p>Sign in to manage conversations and approve agent access.</p>
+        {loading && <p role="status">Checking your owner session…</p>}
+        {!loading && !session && (
+          <button
+            className="outline"
+            onClick={() => {
+              setError("");
+              loadSession();
+            }}
+          >
+            Try connection again
+          </button>
+        )}
         {session && (
           <>
             <p>
@@ -41,12 +76,16 @@ export function OwnerGate({ children }) {
         <form
           onSubmit={async (e) => {
             e.preventDefault();
+            setBusy(true);
+            setError("");
             try {
               await request("/auth/login", { password });
               setPassword("");
-              setSession({ authenticated: true });
+              await loadSession();
             } catch (e) {
               setError(e.message);
+            } finally {
+              setBusy(false);
             }
           }}
         >
@@ -56,11 +95,13 @@ export function OwnerGate({ children }) {
             type="password"
             autoComplete="current-password"
             required
+            autoFocus
+            disabled={busy}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <button className="primary" disabled={!session}>
-            Sign in
+          <button className="primary" disabled={!session || busy || loading}>
+            {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
         {error && <p role="alert">{error}</p>}
@@ -73,12 +114,14 @@ export function OwnerGate({ children }) {
   );
 }
 
-export function AccessPage() {
+export function AccessPage({ agentOrigin = location.origin }) {
   const [data, setData] = useState({ requests: [], accounts: [] }),
     [rooms, setRooms] = useState([]),
     [choices, setChoices] = useState({}),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [loading, setLoading] = useState(true),
+    [busy, setBusy] = useState(false);
   const selectedRequest = new URLSearchParams(location.search).get("request");
   async function refresh() {
     const [access, state] = await Promise.all([
@@ -87,9 +130,13 @@ export function AccessPage() {
     ]);
     setData(access);
     setRooms(state.rooms);
+    setLoading(false);
   }
   useEffect(() => {
-    refresh().catch((e) => setError(e.message));
+    refresh().catch((e) => {
+      setError(e.message);
+      setLoading(false);
+    });
     const t = setInterval(
       () => refresh().catch((e) => setError(e.message)),
       5000,
@@ -99,31 +146,68 @@ export function AccessPage() {
   async function act(fn, message) {
     try {
       setError("");
+      setNotice("");
+      setBusy(true);
       await fn();
       setNotice(message);
       await refresh();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusy(false);
     }
   }
   return (
-    <main className="access-page">
-      <section className="access-card wide">
-        <a href="/">← Conversations</a>
-        <h1>Agent access</h1>
+    <section className="page-content access-content">
+      <div className="access-card wide">
+        <h2>Approve your agents</h2>
         <p>
           Approve agents you recognize. Compare the code with the one the agent
-          gave you. Access includes reading and posting new messages in the
-          conversation you choose, for 30 days.
+          gave you. Approval adds them to your reusable directory for 30 days.
+          You choose which conversations they join; they only see new messages
+          after joining.
         </p>
-        <p>To connect, have the agent run this from the A2Ahub folder:</p>
+        <h3>Connect an agent for automatic replies</h3>
+        <p>
+          Run this once on the agent’s computer from its A2Ahub folder, using
+          that agent’s local A2A endpoint:
+        </p>
         <code className="path">
-          node scripts/a2a-client.mjs auth --name Hermes --url {location.origin}
+          node scripts/a2a-connect.mjs --name YourAgent --url {agentOrigin}{" "}
+          --endpoint LOCAL_A2A_URL
         </code>
+        <p>
+          The connector gives the agent an approval link and reuses its
+          credential after approval. Keep it running so the agent receives new
+          messages and replies in your chats. Then use the plus beside “In this
+          chat” to add it whenever you need it.
+        </p>
+        <p className="hint">
+          For example, a Hermes A2A endpoint may be http://127.0.0.1:9900/. Use
+          the endpoint actually running on that agent’s machine. If it’s another
+          computer, replace the Hub URL above with your reachable Hub agent
+          address; localhost means that computer.
+        </p>
+        <details>
+          <summary>Manual read/post access</summary>
+          <p>
+            For agents that manage their own A2A reads and posts, use the
+            approval helper instead:
+          </p>
+          <code className="path">
+            node scripts/a2a-client.mjs auth --name YourAgent --url{" "}
+            {agentOrigin}
+          </code>
+          <p>
+            This helper authorizes access; it does not start an automatic reply
+            connector.
+          </p>
+        </details>
         {error && <p role="alert">{error}</p>}
         {notice && <p role="status">{notice}</p>}
         <h2>Requests</h2>
-        {!data.requests.length && (
+        {loading && <p role="status">Loading access requests…</p>}
+        {!loading && !data.requests.length && (
           <p>No pending requests. A request link expires after ten minutes.</p>
         )}
         {data.requests.map((r) => (
@@ -136,15 +220,18 @@ export function AccessPage() {
               Verification code: <strong>{r.userCode}</strong>
             </p>
             <p>Expires {new Date(r.expiresAt).toLocaleTimeString()}</p>
-            <label htmlFor={`room-${r.id}`}>Conversation to share</label>
+            <label htmlFor={`room-${r.id}`}>
+              Add to a conversation now <small>(optional)</small>
+            </label>
             <select
               id={`room-${r.id}`}
               value={choices[r.id] || ""}
+              disabled={busy}
               onChange={(e) =>
                 setChoices({ ...choices, [r.id]: e.target.value })
               }
             >
-              <option value="">Choose a conversation</option>
+              <option value="">Directory only — choose a chat later</option>
               {rooms.map((room) => (
                 <option key={room.id} value={room.id}>
                   {room.title}
@@ -154,15 +241,15 @@ export function AccessPage() {
             <div className="access-actions">
               <button
                 className="primary"
-                disabled={!choices[r.id]}
+                disabled={busy}
                 onClick={() =>
                   act(
                     () =>
                       request(`/api/access/${r.id}/decision`, {
                         approved: true,
-                        roomId: choices[r.id],
+                        ...(choices[r.id] ? { roomId: choices[r.id] } : {}),
                       }),
-                    `${r.name} approved. The agent can now collect its credential.`,
+                    `${r.name} approved and added to your directory. The agent can now collect its credential.`,
                   )
                 }
               >
@@ -170,6 +257,7 @@ export function AccessPage() {
               </button>
               <button
                 className="outline"
+                disabled={busy}
                 onClick={() =>
                   act(
                     () =>
@@ -185,14 +273,19 @@ export function AccessPage() {
             </div>
           </article>
         ))}
-        <h2>Connections</h2>
-        {!data.accounts.length && <p>No approved agents yet.</p>}
+        <h2>Approved access</h2>
+        {!loading && !data.accounts.length && <p>No approved agents yet.</p>}
         {data.accounts.map((a) => (
           <article className="access-request" key={a.id}>
             <h3>{a.name}</h3>
             <p>
-              {rooms.find((r) => r.id === a.roomId)?.title ||
-                "Conversation unavailable"}{" "}
+              {(a.bindings
+                ? Object.keys(a.bindings)
+                : a.roomIds || (a.roomId ? [a.roomId] : [])
+              )
+                .map((id) => rooms.find((r) => r.id === id)?.title)
+                .filter(Boolean)
+                .join(", ") || "Available in your directory"}{" "}
               ·{" "}
               {a.revoked
                 ? "Revoked"
@@ -204,6 +297,7 @@ export function AccessPage() {
             {!a.revoked && (
               <button
                 className="outline"
+                disabled={busy}
                 onClick={() =>
                   act(
                     () => request(`/api/access/${a.id}`, null, "DELETE"),
@@ -216,7 +310,7 @@ export function AccessPage() {
             )}
           </article>
         ))}
-      </section>
-    </main>
+      </div>
+    </section>
   );
 }

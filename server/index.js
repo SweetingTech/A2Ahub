@@ -7,6 +7,7 @@ import { discover, send, cancel } from "./protocol.js";
 import { GroupChat } from "./chat.js";
 import { Access } from "./access.js";
 import { mountInbound } from "./inbound.js";
+import { DispatchBroker } from "./dispatch.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.A2AHUB_DATA_DIR || path.join(root, "data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -17,6 +18,7 @@ const room = () => ({
   messages: [],
   contexts: {},
   agentIds: [],
+  memberSince: {},
   agentChat: true,
   replyLimit: 6,
   paused: false,
@@ -36,12 +38,15 @@ let db = fs.existsSync(file)
       rooms: [room()],
     };
 for (const a of db.agents) a.status = "unchecked";
+db.profile ??= { displayName: process.env.USERNAME || "You" };
 for (const r of db.rooms) {
   // Existing rooms gain explicit membership without exposing old transcripts.
   r.agentIds ??= [];
   r.agentChat ??= false;
   r.replyLimit ??= 6;
   r.paused ??= false;
+  r.contexts ??= {};
+  r.memberSince ??= {};
 }
 for (const r of db.rooms)
   for (const m of r.messages)
@@ -54,12 +59,52 @@ function save() {
   fs.renameSync(file + ".tmp", file);
 }
 save();
-const clients = new Set();
-const chat = new GroupChat({ send, cancel, publish, redact: safeError });
+const clients = new Map();
+const access = new Access(dataDir);
+access.migrateRooms(db.rooms);
+save();
+const broker = new DispatchBroker({
+  isAuthorized: (accountId, roomId) =>
+    access.canAccess(accountId, roomId) &&
+    !!db.rooms.find(
+      (r) => r.id === roomId && r.agentIds.includes(accountId) && !r.paused,
+    ),
+  onChange: publish,
+});
+const chat = new GroupChat({
+  send: (agent, ...args) =>
+    agent.kind === "inbound"
+      ? broker.send(agent, ...args)
+      : send(agent, ...args),
+  cancel: (agent, taskId) =>
+    agent.kind === "inbound"
+      ? broker.cancel(agent, taskId)
+      : cancel(agent, taskId),
+  publish,
+  redact: safeError,
+  ownerName: () => db.profile.displayName,
+});
+function participants() {
+  return [
+    ...db.agents.map((a) => ({ ...a, kind: "endpoint" })),
+    ...access.db.accounts
+      .filter((a) => !a.revoked && a.expiresAt > Date.now())
+      .map((a) => ({
+        id: a.id,
+        inboundAccountId: a.id,
+        name: a.name,
+        kind: "inbound",
+        status: broker.status(a.id),
+        expiresAt: a.expiresAt,
+      })),
+  ];
+}
 function snapshot() {
   return {
     ...db,
     runs: chat.snapshot(),
+    participants: participants(),
+    agentOrigin: process.env.A2AHUB_PUBLIC_URL || origin,
     inboundConnections: access.db.accounts
       .filter((a) => !a.revoked && a.expiresAt > Date.now())
       .map(({ id, name, roomId }) => ({ id, name, roomId })),
@@ -67,13 +112,23 @@ function snapshot() {
 }
 function publish() {
   save();
+  closeExpiredClients();
   const payload = `data: ${JSON.stringify(snapshot())}\n\n`;
-  for (const c of clients) c.write(payload);
+  for (const c of clients.keys()) c.write(payload);
+}
+function closeExpiredClients() {
+  for (const [res, req] of clients) {
+    if (access.owner(req)) continue;
+    clients.delete(res);
+    res.write("event: auth-expired\ndata: {}\n\n");
+    res.end();
+  }
 }
 const app = express();
 const port = Number(process.env.PORT || 4317);
 const origin = `http://127.0.0.1:${port}`;
-const access = new Access(dataDir);
+if (!Number.isInteger(port) || port < 1 || port > 65535)
+  throw new Error("PORT must be 1–65535.");
 app.use((req, res, next) => {
   if (!["127.0.0.1", "localhost"].includes(req.hostname))
     return res.status(403).json({ error: "Local access only." });
@@ -89,6 +144,7 @@ app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   next();
 });
+app.use("/a2a/jsonrpc", express.json({ limit: "2mb" }));
 app.use(express.json({ limit: "64kb" }));
 app.use(["/auth", "/api/access"], (req, res, next) => {
   res.set("Cache-Control", "no-store");
@@ -110,18 +166,34 @@ app.post("/auth/login", (req, res) => {
     )
     .json({ ok: true });
 });
+app.post("/auth/logout", (req, res) => {
+  access.logout(req);
+  closeExpiredClients();
+  res
+    .set(
+      "Set-Cookie",
+      "a2ahub_owner=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+    )
+    .json({ ok: true });
+});
 app.post("/auth/device", (req, res) =>
   res
     .status(201)
     .json(access.request(req.body.name, origin, req.socket.remoteAddress)),
 );
-app.post("/auth/token", (req, res) =>
-  res.json(access.poll(req.body.device_code)),
-);
+app.post("/auth/token", (req, res) => {
+  const credential = access.poll(req.body.device_code, {
+    rooms: db.rooms,
+    canJoinRoom: (room) => !chat.active(room.id).length,
+  });
+  publish();
+  res.json(credential);
+});
 app.use("/auth", (err, req, res, next) =>
   res.status(err.status || 400).json({ error: err.message }),
 );
-mountInbound(app, { access, db, publish, origin });
+const onPost = (room, message) => chat.relayPost(room, message);
+mountInbound(app, { access, db, publish, origin, broker, onPost });
 app.use("/api", (req, res, next) => {
   if (!access.owner(req))
     return res
@@ -133,6 +205,8 @@ app.get("/api/access", (req, res) => res.json(access.list()));
 app.post("/api/access/:id/decision", (req, res) => {
   if (typeof req.body.approved !== "boolean")
     throw new Error("Choose Approve or Deny.");
+  if (req.body.roomId && !db.rooms.some((r) => r.id === req.body.roomId))
+    throw new Error("Conversation not found.");
   access.decide(
     req.params.id,
     db.rooms.find((r) => r.id === req.body.roomId),
@@ -143,10 +217,26 @@ app.post("/api/access/:id/decision", (req, res) => {
 });
 app.delete("/api/access/:id", (req, res) => {
   access.revoke(req.params.id);
+  for (const r of db.rooms)
+    r.agentIds = r.agentIds.filter((id) => id !== req.params.id);
+  broker.invalidate(req.params.id);
   publish();
   res.json({ ok: true });
 });
 app.get("/api/state", (req, res) => res.json(snapshot()));
+app.get("/api/profile", (req, res) => res.json(db.profile));
+app.patch("/api/profile", (req, res) => {
+  const { displayName } = req.body;
+  if (
+    typeof displayName !== "string" ||
+    !displayName.trim() ||
+    displayName.length > 80
+  )
+    throw new Error("Your name must be 1–80 characters.");
+  db.profile = { displayName: displayName.trim() };
+  publish();
+  res.json(db.profile);
+});
 app.get("/api/events", (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
@@ -154,9 +244,16 @@ app.get("/api/events", (req, res) => {
     Connection: "keep-alive",
   });
   res.flushHeaders();
-  clients.add(res);
+  clients.set(res, req);
   res.write(`data: ${JSON.stringify(snapshot())}\n\n`);
-  const t = setInterval(() => res.write(": keepalive\n\n"), 20000);
+  const t = setInterval(() => {
+    if (!access.owner(req)) {
+      res.write("event: auth-expired\ndata: {}\n\n");
+      res.end();
+      return;
+    }
+    res.write(": keepalive\n\n");
+  }, 20000);
   req.on("close", () => {
     clearInterval(t);
     clients.delete(res);
@@ -164,6 +261,7 @@ app.get("/api/events", (req, res) => {
 });
 app.post("/api/rooms", (req, res) => {
   const r = room();
+  updateRoom(r, req.body || {});
   db.rooms.unshift(r);
   publish();
   res.json(r);
@@ -208,12 +306,12 @@ function validateMembers(ids, allowEmpty = false) {
     new Set(ids).size !== ids.length
   )
     throw new Error("Choose up to six distinct agents for this chat.");
-  const agents = ids.map((id) => db.agents.find((a) => a.id === id));
+  const directory = participants();
+  const agents = ids.map((id) => directory.find((a) => a.id === id));
   if (agents.some((a) => !a)) throw new Error("Agent not found.");
   return agents;
 }
-app.patch("/api/rooms/:id", (req, res) => {
-  const r = getRoom(req.params.id);
+function updateRoom(r, body) {
   if (chat.active(r.id).length)
     throw new Error(
       "Stop agents before changing chat membership or reply settings.",
@@ -222,7 +320,8 @@ app.patch("/api/rooms/:id", (req, res) => {
     agentIds = r.agentIds,
     agentChat = r.agentChat,
     replyLimit = r.replyLimit,
-  } = req.body;
+    title,
+  } = body;
   validateMembers(agentIds, true);
   if (
     typeof agentChat !== "boolean" ||
@@ -233,7 +332,33 @@ app.patch("/api/rooms/:id", (req, res) => {
     throw new Error(
       "Reply allowance must cover each member and be no more than six.",
     );
+  if (
+    title !== undefined &&
+    (typeof title !== "string" || !title.trim() || title.length > 100)
+  )
+    throw new Error("Conversation title must be 1–100 characters.");
+  const added = agentIds.filter((id) => !r.agentIds.includes(id));
+  const removed = r.agentIds.filter((id) => !agentIds.includes(id));
+  if (added.length || removed.length || agentChat !== r.agentChat) {
+    for (const run of chat.runs.values())
+      if (run.roomId === r.id) run.allowPeers = false;
+  }
+  for (const id of [...added, ...removed]) {
+    delete r.contexts[id];
+    r.memberSince[id] = r.messages.length;
+  }
+  access.setRoomMembers(
+    r,
+    agentIds.filter((id) => access.db.accounts.some((a) => a.id === id)),
+  );
   Object.assign(r, { agentIds, agentChat, replyLimit });
+  if (title !== undefined)
+    Object.assign(r, { title: title.trim(), customTitle: true });
+  for (const id of removed) broker.invalidate(id, r.id);
+}
+app.patch("/api/rooms/:id", (req, res) => {
+  const r = getRoom(req.params.id);
+  updateRoom(r, req.body);
   publish();
   res.json(r);
 });
@@ -279,24 +404,7 @@ app.post("/api/runs", (req, res) => {
   const r = getRoom(roomId);
   if (typeof text !== "string" || !text.trim() || text.length > 12000)
     throw new Error("Enter a message of 1–12,000 characters.");
-  const inbound = access.db.accounts.some(
-    (a) => a.roomId === r.id && !a.revoked && a.expiresAt > Date.now(),
-  );
-  const agents = validateMembers(r.agentIds, inbound);
-  if (!agents.length) {
-    if (r.paused) throw new Error("Agents are paused. Resume before sending.");
-    r.messages.push({
-      id: randomUUID(),
-      role: "user",
-      name: "You",
-      text: text.trim(),
-      state: "sent",
-      createdAt: new Date().toISOString(),
-    });
-    if (r.messages.length === 1) r.title = text.trim().slice(0, 45);
-    publish();
-    return res.status(202).json({ id: null });
-  }
+  const agents = validateMembers(r.agentIds);
   const run = chat.start(r, agents, text.trim());
   res.status(202).json({ id: run.id });
 });
@@ -338,6 +446,83 @@ server.on("error", (e) => {
   );
   process.exit(1);
 });
+// Remote agents get a deliberately narrow listener; owner routes never mount here.
+// The configured public origin is explicit so neither Host nor proxy headers can
+// rewrite approval links or the authenticated A2A endpoint advertised by the card.
+if (process.env.A2AHUB_AGENT_PORT) {
+  const agentPort = Number(process.env.A2AHUB_AGENT_PORT);
+  const publicUrl = new URL(
+    process.env.A2AHUB_PUBLIC_URL || `http://127.0.0.1:${agentPort}`,
+  );
+  if (
+    !Number.isInteger(agentPort) ||
+    agentPort < 1 ||
+    agentPort > 65535 ||
+    agentPort === port ||
+    !["http:", "https:"].includes(publicUrl.protocol) ||
+    publicUrl.username ||
+    publicUrl.password ||
+    publicUrl.pathname !== "/" ||
+    publicUrl.search ||
+    publicUrl.hash
+  )
+    throw new Error(
+      "Configure a distinct A2AHUB_AGENT_PORT and an HTTP(S) A2AHUB_PUBLIC_URL origin.",
+    );
+  const remote = express();
+  remote.use((req, res, next) => {
+    if (
+      req.headers.host !== publicUrl.host ||
+      (req.headers.origin && req.headers.origin !== publicUrl.origin)
+    )
+      return res.status(403).json({ error: "Agent origin is not allowed." });
+    res.set({
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+    });
+    next();
+  });
+  remote.use("/a2a/jsonrpc", express.json({ limit: "2mb" }));
+  remote.use(express.json({ limit: "64kb" }));
+  remote.post("/auth/device", (req, res) =>
+    res
+      .status(201)
+      .json(access.request(req.body.name, origin, req.socket.remoteAddress)),
+  );
+  remote.post("/auth/token", (req, res) => {
+    const credential = access.poll(req.body.device_code, {
+      rooms: db.rooms,
+      canJoinRoom: (room) => !chat.active(room.id).length,
+    });
+    publish();
+    res.json(credential);
+  });
+  mountInbound(remote, {
+    access,
+    db,
+    publish,
+    origin: publicUrl.origin,
+    broker,
+    onPost,
+  });
+  remote.use((req, res) =>
+    res.status(404).json({ error: "Agent endpoint only." }),
+  );
+  remote.use((err, req, res, next) =>
+    res.status(err.status || 400).json({ error: err.message }),
+  );
+  const agentServer = remote.listen(
+    agentPort,
+    process.env.A2AHUB_AGENT_HOST || "127.0.0.1",
+    () =>
+      console.log(`A2Ahub agent endpoint advertised at ${publicUrl.origin}`),
+  );
+  agentServer.on("error", (error) => {
+    console.error(`Agent listener: ${error.message}`);
+    process.exit(1);
+  });
+}
 for (const a of db.agents) {
   try {
     Object.assign(a, await discover(a.url, a.tokenEnv));

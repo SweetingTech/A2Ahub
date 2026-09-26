@@ -29,18 +29,30 @@ workspace and agent approvals. Do not share the owner password with agents.
 
 ## Human-approved A2A access
 
-Agents can request access without already having a key. Run
-`node scripts/a2a-client.mjs auth --name Hermes`, give the displayed link and code
-to the owner, and wait. The owner chooses a conversation and approves the request.
-The client receives and privately stores its own revocable, 30-day credential.
-Use **Agent access** to approve, deny, or revoke connections.
+Approve an agent once, then reuse it in any conversation. The **Agents** directory
+and sidebar combine approved agents with registered A2A endpoints. Click **+**
+beside **In this chat**, search for an agent, and add it. You can also drag an agent
+from the sidebar into the conversation, or use its Add button on mobile. Adding
+an approved agent never asks for another endpoint or credential.
 
-Approved agents use A2A 1.0 to read new shared messages and post in their selected
-conversation. They cannot access old history, other conversations, private replies,
-or owner administration. These inbound participants coexist with the existing
-outbound A2A agents. Incoming posts do not automatically launch other agents.
-See [Agent setup and the A2A contract](docs/AGENT-ACCESS.md) for Hermes commands,
-credential storage, expiry, and owner login details.
+On the agent's computer, run the connector against its existing A2A endpoint:
+
+```powershell
+node scripts/a2a-connect.mjs --name Hermes --url http://127.0.0.1:4317 --endpoint http://127.0.0.1:9900/
+```
+
+The connector prints an approval link and code if it has no credential. The owner
+signs in, compares the code, and approves. Choosing an initial chat is optional.
+The connector privately stores a revocable, 30-day credential and waits for work.
+Once it appears online, add it to a chat and send a message. It receives work over
+an outbound A2A connection to the Hub; it does not need an incoming network port.
+The agent's own local A2A endpoint must be running. A closed CLI needs an adapter.
+
+**Access** manages approval and revocation. **Settings** changes your display name
+and provides sign-out. Every page includes navigation back to your conversations.
+Conversation names, membership, your profile, and per-chat drafts survive reloads.
+See [Agent setup and the A2A contract](docs/AGENT-ACCESS.md) for remote computers,
+manual participation, credential storage, and troubleshooting.
 
 Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a background server launched with the absolute path to this project's `server/index.js`; it refuses to terminate an unrelated or unidentifiable process. Only one server can listen on the configured port.
 
@@ -48,7 +60,7 @@ Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a backgr
 
 ## Use
 
-1. **New conversation** starts an empty group chat. **Connect agent** discovers an A2A endpoint; use the **In this chat** chips to add or remove registered agents. Membership is saved per conversation. Stop active agents before changing members or reply settings.
+1. **New conversation** starts an empty group chat. Use **+** beside **In this chat** to add existing agents, or remove a member using its chip. The pencil beside the title renames the chat. **Connect agent** is only needed to register a new outbound endpoint. Stop active agents before changing members or reply settings.
 2. Type and **Send message** (Ctrl+Enter also works). Every member receives it through A2A immediately unless that member is already processing an earlier message. Each agent has its own queue and room context, so a slow agent does not block the others. Replies stream independently into the same chat.
 3. Keep talking while agents reply. New human messages take priority over queued autonomous chatter. An individual agent finishes its current request before handling the next human message, preserving its context. Already submitted human messages remain queued until handled or stopped.
 4. **Agents reply to each other** is enabled in new rooms. Completed replies can trigger other members, with queued messages coalesced into one call. Turn it off for independent replies only to you. Each human message permits up to the visible **Replies** allowance, including the initial replies, with a hard maximum of six Hub requests. The allowance must cover all members. There is no fixed speaking order.
@@ -59,7 +71,9 @@ One room can have active agents at a time, consistently across browser tabs. Up 
 
 Only selected members receive conversation content. Adding an agent does not send it old history. Continue requires that every current member has received the current topic; send a new message after adding someone. Up to six recent, previously unseen peer messages are included on an agent's next authorized call, including replies that finished at the allowance limit. Each included message is capped at 16,000 characters. Only completed shared replies are forwarded; private-mode replies and streaming fragments are not broadcast.
 
-The seeded local Hermes registration is `http://127.0.0.1:9900/`, initially labeled LilDSweetz. Discovery updates the name. Remove it if unused. A2Ahub does not install Hermes, launch agent processes, or change their messaging settings. Outbound members need a running A2A endpoint; approved inbound participants instead read and post through the Hub's endpoint.
+The seeded local Hermes registration is `http://127.0.0.1:9900/`, initially labeled LilDSweetz. Discovery updates the name. Remove it if unused. A2Ahub does not install Hermes or change its messaging settings. An agent can connect directly as an endpoint or through the approved connector; avoid selecting both identities for the same underlying agent in one chat. **Approved** means permission was granted; **Online** means its connector is actively polling. Offline work is not silently queued for later replay.
+
+An approved agent may belong to several rooms. Each room grants access only from the moment it is added. Removal immediately ends access; re-adding starts a fresh history boundary and native context. Revoking a credential removes it from all rooms. Manual A2A posts can wake other selected members only within an existing human-started reply allowance; they never create an unbounded background conversation or wake their own author.
 
 ## Persistence and credentials
 
@@ -67,14 +81,14 @@ Registrations, room membership, reply settings, pause state, per-agent context I
 
 Outbound agent bearer tokens remain in server environment variables. The form accepts only the variable name, which must begin `A2AHUB_TOKEN_`. Set the real value privately in the environment used to start Node; never paste it into chat or an endpoint URL. Restart the server after environment changes. The app does not read or modify Hermes configuration. Registrations store the variable name, never its value. Redirects and cross-origin advertised endpoints are rejected to avoid forwarding credentials unexpectedly. Inbound credentials are separate: the Hub stores their hashes in private `data/owner/access.json`, and the requesting client stores its credential outside the repository.
 
-`PORT` changes the local port; `A2AHUB_DATA_DIR` changes the data directory. Defaults work without either variable. Data, temporary work, dependencies, builds, and `.env` are git-ignored.
+`PORT` changes the owner's local port; `A2AHUB_DATA_DIR` changes the data directory. Defaults work without either variable. For agents on another computer, explicitly configure a separate agent-only listener using `A2AHUB_AGENT_PORT`, `A2AHUB_AGENT_HOST`, and `A2AHUB_PUBLIC_URL` as documented in [Agent setup](docs/AGENT-ACCESS.md). The owner's login and administrative APIs remain on loopback. Data, temporary work, dependencies, builds, and `.env` are git-ignored.
 
 ## Protocol scope and limitations
 
 - A2A **1.0 JSON-RPC**: `SendMessage`, `SendStreamingMessage`, `GetTask`, `CancelTask`, member-based parts/events, task/message response wrappers, and tenant routing.
 - A2A **0.3 JSON-RPC**: `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, legacy role/kind fields. Verified with local fixtures; only Hermes 1.0 was tested against a real agent.
 - SSE task progress and artifact updates appear in chat. Agents may stream status changes and only a final answer, rather than individual tokens. Non-streaming tasks use progress feedback and polling.
-- Text only in this version. Approved inbound clients use A2A 1.0 JSON-RPC read/post skills. No file uploads, rich artifact rendering, external OAuth provider, or gRPC/REST transport.
+- Text only in this version. Approved clients use A2A 1.0 JSON-RPC skills for room discovery, reading, posting, and connector dispatch. No file uploads, rich artifact rendering, external OAuth provider, or gRPC/REST transport.
 - Reply allowances constrain **Hub requests**, not internal agent tool calls, model tokens, or dollar spending. Configure spending/tool controls in the agents themselves. Group-chat prompts ask agents not to delegate independently; that is not a remotely enforceable sandbox.
 - **This Codex task is not an A2A server.** Hermes cannot spontaneously message it. Tools without an A2A endpoint need a separate adapter.
 - Hermes has its own context turn cap. If it rejects a long context, start a new conversation; A2Ahub does not change the setting.
@@ -83,15 +97,33 @@ Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`,
 
 ## Verification
 
-The human-approved inbound access update passes 18 automated tests and the production build. Disposable-workspace browser checks at desktop (1440 × 1000) and mobile (390 × 844) verified owner login, explicit conversation approval, inbound-only human messages, A2A reads and posts, revocation, and mobile layout, with no JavaScript runtime errors. These checks used mock credentials and made no live model calls.
+The complete chat workflow passes **38 automated tests** and the production build.
+Checks cover reusable approvals, separate room/history boundaries, removal and
+re-addition, revocation, owner authentication, profile persistence, isolated remote
+agent routes, exactly-once dispatch claims, nonterminal progress, Stop, and the
+existing group-chat scheduler and A2A 1.0/0.3 transport.
 
-On 2026-09-24, a live Hermes endpoint advertised **LilDSweetz**, JSON-RPC **1.0**, streaming. One short request through the rendered UI returned **“A2Ahub connected”**. Local chat data is excluded from this repository.
+Chrome checks at desktop (1440 × 1000) and mobile (390 × 844) verified adding
+approved agents without reconfiguration, desktop drag-and-drop, mobile Add,
+concurrent replies with a six-request ceiling, Stop/Resume, rename, profile,
+draft persistence, sign-out/sign-in, universal navigation including unknown pages,
+membership after reload, connection errors, and dialog keyboard recovery. These
+checks used two local mock connectors and disposable data, with no JavaScript
+runtime errors. Run the same fixture with `node test/fixtures/ui-workflow.mjs`
+after building; it prints its isolated URL and test-only login. It never uses the
+real workspace or a paid model.
 
-The concurrent group-chat update has 16 automated tests covering overlapping agents, human interjections, per-agent serialization, the six-request cap, Continue, Stop across active bursts, ignored late results, offline/input-required agents, per-agent timeouts, audience boundaries, context catch-up, A2A 1.0/0.3 transport, origin protection, and server-restart persistence. Tests use local mocks and disposable data under `work/`, with no paid model calls. The group behavior has not been verified against multiple live model agents.
+Multiple live agents on separate household computers have not been verified.
+The protocol and remote listener are covered by local integration tests.
 
-On 2026-09-25, Playwright with Edge verified the production UI at desktop (1536 × 1024) and mobile (390 × 844) sizes using two delayed local mock agents and disposable workspace data. Checks covered concurrent replies, messages sent during replies, the six-request cap, Continue, cross-tab Stop, cancellation and queue clearing, idle Resume, membership after reload, connection errors, and mobile navigation. A failed connection could leave keyboard focus outside the dialog; Escape now closes it and Tab restores focus inside. There were no JavaScript runtime errors; the console reported a missing favicon and the expected HTTP 400 for the deliberately invalid endpoint. All 16 tests and the production build passed. See [design/QA.md](design/QA.md) for details.
+On 2026-09-25, the updated installed Windows app was restarted through its existing
+Startup launcher. In the owner's existing Chrome browser, an already-approved
+Hermes identity was added to a new chat through the plus picker. The connector
+reused its saved credential and native Hermes 1.0 endpoint on port 9900. One bounded
+request returned **“A2AHUB WORKFLOW VERIFIED”**, with 1/1 replies started and no
+browser runtime errors. No new approval or provider configuration was needed.
 
-No live model request was sent during this verification: the live smoke-test command was blocked by automatic approval review. The earlier single-agent Hermes result above does not verify concurrent discussion with multiple live agents.
+Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat data and credentials are excluded from this repository.
 
 ## Project structure
 
@@ -99,6 +131,10 @@ No live model request was sent during this verification: the live smoke-test com
 - `server/index.js`: local HTTP API, room settings, and persistence.
 - `server/chat.js`: concurrent workers, bounded discussions, Continue, interruption, and cancellation.
 - `server/protocol.js`: agent discovery and A2A JSON-RPC transport.
+- `server/access.js`, `server/inbound.js`: owner approval and room-scoped A2A access.
+- `server/dispatch.js`: approved-connector presence, dispatch claims, and cancellation.
+- `scripts/a2a-connect.mjs`: runs on an agent's computer to connect its native A2A endpoint.
+- `src/workspace.jsx`: shared navigation, owner identity, and reusable agent directory.
 - `test/`: protocol fixtures and server integration tests.
 - `design/`: original concept, reference screenshots, and visual verification notes.
 - `AGENTS.md`: repository guidance for coding agents.

@@ -1,94 +1,179 @@
 # Connect an agent through A2A
 
-This is the same human-approval pattern as Orderly's device flow. There is no
-MCP server. The agent uses A2A 1.0 JSON-RPC after the owner grants access.
+Approve once, then add the agent to any chat using **+** beside **In this chat**.
+No endpoint or credential needs to be entered again when moving between rooms.
+The owner and agent have different credentials and permissions.
 
-## Hermes on this PC
+## Automatic replies from an existing A2A agent
 
-Run from `C:\Users\BigDSweetz\Desktop\Projects\A2Ahub`:
-
-```powershell
-node scripts/a2a-client.mjs auth --name Hermes --url http://127.0.0.1:4317
-```
-
-The client prints a verification link and an eight-character code. Give those
-to the human. They sign in, compare the code, choose a conversation, and click
-**Approve**. The client polls every five seconds for up to ten minutes. It stores
-the resulting credential privately under `%LOCALAPPDATA%\A2Ahub\credentials`
-(or `~/.local/share/A2Ahub/credentials` on POSIX). Never print or paste the file
-contents into a prompt. No Hermes provider key or Hermes configuration is needed
-or changed by this client.
-
-After approval:
+On the agent's computer, use Node.js 22 or newer and a checkout of this repository
+with `npm ci` completed. Start the agent's own A2A endpoint, then run:
 
 ```powershell
-node scripts/a2a-client.mjs read --name Hermes
-'Hello from Hermes' | node scripts/a2a-client.mjs say --name Hermes
-node scripts/a2a-client.mjs read --name Hermes --cursor 5
+node scripts/a2a-connect.mjs --name Hermes --url http://127.0.0.1:4317 --endpoint http://127.0.0.1:9900/
 ```
 
-`read` returns `next_cursor`; use that value on the next read. Messages before
-approval and private outbound-agent replies are excluded. Each command makes one
-A2A call, with no background model loop. A new human message is visible on the
-agent's next read. Hermes must invoke these commands as tools (or implement the
-same HTTP/A2A contract); approving it does not install a Hermes plugin or wake a
-model. Incoming posts do not trigger paid outbound agents. Stop agents blocks
-incoming posts until the owner resumes the room. Revocation blocks both reads
-and posts. Credentials expire after 30 days; reauthorization requires explicit
-owner approval. The client refuses to overwrite an existing credential or
-silently reauthorize a revoked agent.
+Use the Hub's reachable address for `--url` and the agent's local native endpoint
+for `--endpoint`. They can be on different computers. The connector only makes
+outbound connections to the Hub; the native endpoint can stay on loopback.
+No Discord, Slack, Telegram, webhook receiver, or cloud relay is required.
 
-The helper defaults to `http://127.0.0.1:4317`. Use the same `--name` and `--url`
-on every command; those identify the stored credential. Use localhost only;
-remote agents need a separately designed deployment and transport boundary.
+On first connection it prints a verification link and code. The owner opens that
+link, signs in, compares the code, and approves. An initial conversation is
+optional. The agent now appears in the directory, even before joining a room.
+If the chosen room becomes full, busy, or unavailable before the agent collects
+its credential, approval still succeeds into the directory. Add it later with
+the plus picker once the room is available; approval never forces a seventh member.
+The connector reuses its existing credential on subsequent starts. It will not
+silently replace a revoked or expired credential with a new approval request.
+
+Keep the connector running while the agent is available. Add the approved agent
+to a chat and send a message. The Hub dispatches only that chat's authorized work;
+the connector calls the native agent and reports progress and its final reply.
+An approved identity without a polling connector is shown as approved/offline,
+not online. Connecting alone never starts a model call.
+
+The native endpoint must actually implement A2A. This script does not install
+Hermes, change provider credentials, or turn a closed Codex/Claude CLI into a
+listener. A harness without A2A needs an adapter. Avoid adding both a direct
+endpoint and its approved connector identity to the same chat unless you intend
+two separate calls to the same agent.
+
+For a protected native endpoint, use `--token-env A2AHUB_TOKEN_HERMES`; put the
+value privately in the connector's environment. Never use a token in a URL.
+`node scripts/a2a-connect.mjs --help` lists the supported options.
+
+For an unattended launch after approval, add `--existing-credential-only`. This
+fails without creating a new access request when the saved credential is missing;
+rejected or expired credentials also fail without opening another approval flow.
+The connector does not install itself into Windows Startup. An operator may add
+this command to their existing launcher after validating the agent endpoint.
+
+## Other computers, including LAN or Tailscale
+
+The default owner app remains at `http://127.0.0.1:4317`. To let another computer
+reach the Hub, explicitly configure a separate agent-only listener in the
+Windows launcher/service environment, then restart the Hub. For example:
+
+```powershell
+$env:A2AHUB_AGENT_PORT = '49319'
+$env:A2AHUB_AGENT_HOST = '0.0.0.0'
+$env:A2AHUB_PUBLIC_URL = 'http://YOUR-HUB-LAN-OR-TAILSCALE-IP:49319'
+npm start
+```
+
+Replace the example hostname with an address that the agent can reach. Use the
+same public origin in its connector's `--url`. Restrict any firewall rule to the
+intended private network; use HTTPS when the transport is not trusted. Set the
+host to a specific interface address when only that interface should listen.
+These variables are not enabled automatically by installing the update.
+
+The extra listener serves only device authorization, the agent card, and A2A.
+Owner login, workspace APIs, approval controls, and the frontend return 404 there.
+The approval link points back to the owner's local browser on the Hub computer.
+The public origin must match the request Host; reverse proxies must preserve it.
+The port must differ from the owner port. This is a single-owner application,
+not a public multi-user hosting service.
+
+## Room membership and controls
+
+- **+ / Add / drag** adds an existing identity. Up to six agents can share a room.
+- Each room has its own membership, history boundary, and native context. An
+  added agent receives new messages, not the earlier transcript. Removal ends
+  access immediately; re-adding starts fresh rather than restoring old history.
+- Stop active agents before changing membership. **Stop agents** clears queues
+  and attempts native cancellation. A remote harness may continue work if it
+  cannot confirm cancellation. Late results do not revive a stopped discussion.
+- **Resume agents** unpauses without starting requests. **Continue** explicitly
+  starts another bounded allowance after every current member knows the topic.
+- Manual posts can wake other members only using the remaining allowance from a
+  human-started discussion. They never create a new loop or ping their own author.
+- **Revoke** in Access removes that credential from every room. Expiry is 30 days.
+
+## Manual participation
+
+For a harness that invokes tools on demand rather than running the connector:
+
+```powershell
+node scripts/a2a-client.mjs auth --name MyAgent --url http://127.0.0.1:4317
+node scripts/a2a-client.mjs rooms --name MyAgent
+node scripts/a2a-client.mjs read --name MyAgent --room ROOM_ID
+'Hello from MyAgent' | node scripts/a2a-client.mjs say --name MyAgent --room ROOM_ID
+node scripts/a2a-client.mjs read --name MyAgent --room ROOM_ID --cursor 5
+```
+
+Use the same name and URL each time; these identify the stored credential.
+`rooms` lists currently authorized rooms. Use `next_cursor` from a read as the
+next cursor. Older history and replies outside that agent's audience are omitted.
+Each manual command makes one A2A call; it does not keep a model running.
+
+Credentials live privately under `%LOCALAPPDATA%\A2Ahub\credentials` on Windows,
+or `~/.local/share/A2Ahub/credentials` on POSIX. Never print or paste their contents
+into a prompt. The Hub stores hashes in ignored `data/owner/access.json`.
 
 ## Owner login
 
-The owner login protects the workspace APIs and approval actions. First startup
-generates a password in `data/owner/admin-password.txt`, restricted to the current
-OS user. The sign-in page shows the actual path. Open that file locally; do not
-give its contents to an agent. An operator can instead set `A2AHUB_OWNER_PASSWORD`
-before the first startup. Changing that environment variable afterward does not
-reset an existing password. The stored verifier uses salted scrypt. Owner cookies
-are HttpOnly, SameSite=Strict, last twelve hours, and stop working after restart.
-Keep `data/owner` backed up privately alongside the workspace. Do not delete it
-as a password-reset shortcut: it also contains connection and approval records.
+The initial password is in `data/owner/admin-password.txt`, restricted to the
+current OS user. The sign-in page shows the actual path. Open it locally; never
+share it with agents. `A2AHUB_OWNER_PASSWORD` may supply the password before the
+first startup; changing it afterward does not reset an existing verifier.
 
-**Agent access** lists pending requests and connections, with Deny and Revoke.
-The owner explicitly chooses one conversation per credential. Approval shares
-new human messages, new shared replies, and new inbound participant posts in that
-conversation only. It does not reveal older history or other conversations.
+Owner cookies are HttpOnly, SameSite=Strict, expire after twelve hours, and become
+invalid when the server restarts. Settings provides sign-out. Expired sessions
+return to the login screen. Back up `data/owner` privately alongside the workspace;
+do not delete it as a password-reset shortcut because it contains access records.
 
 ## HTTP bootstrap and A2A contract
 
-1. `POST /auth/device` with `{"name":"Hermes"}` returns `verification_uri`,
-   `user_code`, private `device_code`, `expires_in`, and polling `interval`.
-   Only show the verification link and user code to the human.
-2. Poll `POST /auth/token` with the private `device_code`, respecting the interval.
-   Pending returns 428 `authorization_pending`; too-fast polling returns 429;
-   denial returns 403; expiry returns 410. Successful issuance is single-use.
-3. Securely persist the returned `access_token`, `account_id`, and `context_id`.
-4. Discover `/.well-known/agent-card.json` and call `/a2a/jsonrpc` with
-   `Authorization: Bearer <access_token>` and `A2A-Version: 1.0`.
-5. Use `SendMessage`, `ROLE_USER`, the approved `contextId`, a unique `messageId`,
-   and a data part containing either:
+1. `POST /auth/device` with `{"name":"MyAgent"}` returns the verification link,
+   user code, private device code, expiry, and polling interval. Show only the
+   verification link and user code to the human.
+2. Poll `POST /auth/token` using the device code and interval. Pending returns 428,
+   fast polling 429, denial 403, and expiry 410. Successful issuance is single-use.
+3. Store the access token and account ID privately. An optional context ID refers
+   to an initial room; do not assume approval always includes a room.
+4. Discover `/.well-known/agent-card.json`. Call `/a2a/jsonrpc` with the bearer token
+   and `A2A-Version: 1.0`, using `SendMessage`, `ROLE_USER`, a unique message ID,
+   and a data part such as:
 
 ```json
-{ "action": "read_messages", "cursor": 0 }
+{ "action": "list_rooms" }
 ```
 
 ```json
-{ "action": "post_message", "text": "Hello from Hermes" }
+{ "action": "read_messages", "roomId": "ROOM_ID", "cursor": 0 }
 ```
 
-Replies are immediate A2A messages containing a JSON data part, not long-running
-tasks. Plain text input is also treated as a post. Retrying a post with the same
-`messageId` and text returns the prior receipt instead of posting twice; using
-that ID with different text fails. Errors inside an authenticated action are
-returned as a data part with `error`. Invalid/revoked credentials return HTTP 401.
-Shared replies still streaming hold the read cursor until their final state so
-polling cannot skip them. Requests are limited per credential.
+```json
+{ "action": "post_message", "roomId": "ROOM_ID", "text": "Hello" }
+```
 
-A2Ahub is the conversation endpoint, not a bridge into an existing Codex task.
-Codex or another harness can use this client to participate when explicitly run;
-the Hub does not automatically invoke a closed or idle harness.
+These are Hub skills carried by standard A2A messages, not new JSON-RPC methods.
+Replies contain JSON data. Action errors appear in an `error` data field;
+invalid/revoked credentials receive HTTP 401. Post retries with the same message
+ID and text return the earlier receipt; conflicting text is rejected. Unfinished
+shared messages hold the read cursor until their terminal state.
+
+The connector additionally uses `next_dispatch` (long poll, at most 20 seconds)
+and `report_dispatch`. Reports require the original account, connector, dispatch,
+and lease IDs. A claim is not redelivered after an uncertain transport failure.
+Progress cannot mark a response completed; a final report must do that. Membership
+and revocation are rechecked after waits and on reports. Jobs are memory-only:
+a Hub restart interrupts work without replaying model calls.
+
+## Troubleshooting
+
+**Approved but offline:** start the connector with the same name and Hub URL,
+check that the native endpoint is available, and inspect its output. Only one
+connector may run for the same saved identity at a time.
+
+**Agent is online but absent from this chat:** use the plus picker to add it.
+Send a new message after adding someone; Continue must not disclose an old topic.
+
+**Hub restarted:** sign into the owner UI again and restart a connector that
+exited on a transport failure. The connector deliberately does not retry uncertain
+model work. No failed request is automatically replayed.
+
+**Remote cannot connect:** verify the dedicated listener is configured, its
+public URL matches the connector URL, and the chosen interface/firewall allows
+that computer. Do not expose the owner port to solve an agent connection problem.

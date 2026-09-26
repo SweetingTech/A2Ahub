@@ -90,12 +90,19 @@ export class Access {
     return token;
   }
   owner(req) {
-    const cookie = req.headers.cookie
+    const cookie = this.sessionCookie(req);
+    return !!cookie && (this.sessions.get(hash(cookie)) || 0) > this.now();
+  }
+  sessionCookie(req) {
+    return req.headers.cookie
       ?.split(";")
       .map((x) => x.trim())
       .find((x) => x.startsWith("a2ahub_owner="))
       ?.slice(13);
-    return !!cookie && (this.sessions.get(hash(cookie)) || 0) > this.now();
+  }
+  logout(req) {
+    const cookie = this.sessionCookie(req);
+    if (cookie) this.sessions.delete(hash(cookie));
   }
   request(name, origin, ip) {
     this.limit(`device:${ip}`, 30, 600000);
@@ -129,7 +136,6 @@ export class Access {
     const r = this.db.requests.find((r) => r.id === id);
     if (!r || r.expiresAt <= this.now() || r.state !== "pending")
       throw fail(409, "Request is expired or already handled.");
-    if (approved && !room) throw fail(400, "Choose a conversation.");
     Object.assign(r, {
       state: approved ? "approved" : "denied",
       roomId: room?.id,
@@ -137,7 +143,7 @@ export class Access {
     });
     this.save();
   }
-  poll(code) {
+  poll(code, { rooms, canJoinRoom } = {}) {
     if (typeof code !== "string" || code.length > 256)
       throw fail(400, "Invalid device code.");
     const r = this.db.requests.find((r) => r.deviceHash === hash(code));
@@ -157,6 +163,8 @@ export class Access {
       name: r.name,
       roomId: r.roomId,
       startIndex: r.startIndex,
+      bindings: r.roomId ? { [r.roomId]: r.startIndex } : {},
+      pendingRoomMembership: !!r.roomId,
       tokenHash: hash(token),
       createdAt: this.now(),
       expiresAt: this.now() + 30 * 86400000,
@@ -164,13 +172,14 @@ export class Access {
     };
     this.db.accounts.push(account);
     r.state = "claimed";
+    if (rooms) this.migrateRooms(rooms, { canJoinRoom });
     this.save();
     return {
       access_token: token,
       token_type: "Bearer",
       expires_in: 30 * 86400,
       account_id: account.id,
-      context_id: account.roomId,
+      context_id: account.roomId || "",
     };
   }
   authenticate(header) {
@@ -180,6 +189,115 @@ export class Access {
     if (!account || account.revoked || account.expiresAt <= this.now())
       throw fail(401, "Invalid, expired, or revoked credential.");
     return account;
+  }
+  active(account) {
+    return !!account && !account.revoked && account.expiresAt > this.now();
+  }
+  canAccess(accountId, roomId) {
+    const account = this.db.accounts.find((a) => a.id === accountId);
+    return (
+      this.active(account) &&
+      typeof roomId === "string" &&
+      !!account.bindings &&
+      Object.hasOwn(account.bindings, roomId) &&
+      Number.isInteger(account.bindings[roomId]) &&
+      account.bindings[roomId] >= 0
+    );
+  }
+  migrateRooms(rooms, { canJoinRoom = () => true } = {}) {
+    let changed = false;
+    for (const account of this.db.accounts) {
+      const legacy = !Object.hasOwn(account, "bindings");
+      if (legacy) {
+        const initial = rooms.find((r) => r.id === account.roomId);
+        account.bindings = initial
+          ? {
+              [initial.id]:
+                Number.isInteger(account.startIndex) && account.startIndex >= 0
+                  ? account.startIndex
+                  : initial.messages.length,
+            }
+          : {};
+        changed = true;
+      }
+      // Only migrate an old approval or materialize an explicitly chosen
+      // initial room. Ordinary restarts must not re-add removed memberships.
+      if ((legacy || account.pendingRoomMembership) && this.active(account)) {
+        if (account.roomId && !rooms.some((r) => r.id === account.roomId)) {
+          delete account.bindings[account.roomId];
+          delete account.roomId;
+          delete account.startIndex;
+          changed = true;
+        }
+        for (const r of rooms) {
+          if (!this.canAccess(account.id, r.id)) continue;
+          r.agentIds ??= [];
+          r.memberSince ??= {};
+          if (!r.agentIds.includes(account.id)) {
+            // The owner may approve before the agent collects its token. Check
+            // the room again now: an optional join must not overfill or change
+            // an active chat, nor be retried silently after a later restart.
+            if (r.agentIds.length >= 6 || !canJoinRoom(r)) {
+              delete account.bindings[r.id];
+              if (account.roomId === r.id) {
+                delete account.roomId;
+                delete account.startIndex;
+              }
+              changed = true;
+              continue;
+            }
+            r.agentIds.push(account.id);
+          }
+          r.replyLimit = Math.min(
+            6,
+            Math.max(
+              r.agentIds.length,
+              Number.isInteger(r.replyLimit) ? r.replyLimit : 6,
+            ),
+          );
+          r.memberSince[account.id] = account.bindings[r.id];
+        }
+      }
+      if (account.pendingRoomMembership) {
+        delete account.pendingRoomMembership;
+        changed = true;
+      }
+    }
+    if (changed) this.save();
+    return changed;
+  }
+  setRoomMembers(room, accountIds) {
+    if (
+      !Array.isArray(accountIds) ||
+      new Set(accountIds).size !== accountIds.length
+    )
+      throw fail(400, "Choose distinct approved agents.");
+    const selected = new Set(accountIds);
+    for (const id of selected) {
+      if (!this.active(this.db.accounts.find((a) => a.id === id)))
+        throw fail(400, "Approved agent is unavailable or access has expired.");
+    }
+    for (const account of this.db.accounts) {
+      account.bindings ??= {};
+      if (selected.has(account.id)) {
+        if (!Object.hasOwn(account.bindings, room.id))
+          account.bindings[room.id] = room.messages.length;
+      } else delete account.bindings[room.id];
+    }
+    this.save();
+  }
+  rooms(account, rooms) {
+    return rooms
+      .filter(
+        (r) =>
+          this.canAccess(account.id, r.id) && r.agentIds?.includes(account.id),
+      )
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        paused: !!r.paused,
+        start_cursor: account.bindings[r.id],
+      }));
   }
   revoke(id) {
     const account = this.db.accounts.find((a) => a.id === id);

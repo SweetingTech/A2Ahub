@@ -7,12 +7,15 @@ import {
 import { agentCardHandler, jsonRpcHandler } from "@a2a-js/sdk/server/express";
 import { Role } from "@a2a-js/sdk";
 
-export function mountInbound(app, { access, db, publish, origin }) {
+export function mountInbound(
+  app,
+  { access, db, publish, origin, broker, onPost },
+) {
   const card = {
     name: "A2Ahub",
     description:
-      "Human-approved shared conversation access. Request a credential at /auth/device, show the verification link to the human, then poll /auth/token. Use read_messages or post_message data parts after approval.",
-    version: "1.0.0",
+      "Human-approved conversation access. Request a credential at /auth/device, show the verification link to the human, then poll /auth/token. The owner adds your reusable identity to conversations. Use list_rooms, read_messages and post_message; connectors use next_dispatch and report_dispatch to receive authorized turns and return replies.",
+    version: "1.1.0",
     supportedInterfaces: [
       {
         url: `${origin}/a2a/jsonrpc`,
@@ -42,13 +45,27 @@ export function mountInbound(app, { access, db, publish, origin }) {
       },
     },
     securityRequirements: [{ schemes: { bearer: { list: [] } } }],
-    skills: ["read_messages", "post_message"].map((id) => ({
+    skills: [
+      "list_rooms",
+      "read_messages",
+      "post_message",
+      "next_dispatch",
+      "report_dispatch",
+    ].map((id) => ({
       id,
       name: id.replaceAll("_", " "),
-      description:
-        id === "read_messages"
-          ? "Read new messages in your approved conversation using {action:read_messages,cursor:0}."
-          : "Post to your approved conversation using {action:post_message,text:...}. Does not trigger other agents automatically.",
+      description: {
+        list_rooms:
+          "List the conversations the owner has added you to using {action:list_rooms}.",
+        read_messages:
+          "Read new shared messages using {action:read_messages,roomId:...,cursor:0}. The room must be explicitly assigned by the owner.",
+        post_message:
+          "Post using {action:post_message,roomId:...,text:...}. A post does not grant permission for automatic model work.",
+        next_dispatch:
+          "Connectors poll for an authorized turn using {action:next_dispatch,connectorId:...,available:true}. When busy, poll with available:false for cancellations. No model work starts merely by polling.",
+        report_dispatch:
+          "Connectors report progress or a final result using {action:report_dispatch,dispatchId:...,leaseId:...,connectorId:...,kind:...,result:{text,state,contextId}}.",
+      }[id],
       tags: ["chat"],
       examples: [],
       inputModes: ["application/json"],
@@ -58,17 +75,12 @@ export function mountInbound(app, { access, db, publish, origin }) {
   };
   const executor = {
     async execute(ctx, bus) {
-      const account = ctx.context.user.account;
+      let account = ctx.context.user.account;
       let result;
+      let contextId = "";
       try {
-        access.authenticate(ctx.context.user.authorization);
+        account = access.authenticate(ctx.context.user.authorization);
         access.limit(`a2a:${account.id}`, 120, 60000);
-        const room = db.rooms.find((r) => r.id === account.roomId);
-        if (
-          !room ||
-          (ctx.userMessage.contextId && ctx.userMessage.contextId !== room.id)
-        )
-          throw new Error("Conversation access denied.");
         const part = ctx.userMessage.parts.find(
           (p) => p.content?.$case === "data",
         );
@@ -77,91 +89,150 @@ export function mountInbound(app, { access, db, publish, origin }) {
           .map((p) => p.content.value)
           .join("\n");
         const command = part?.content.value || { action: "post_message", text };
-        if (command.action === "read_messages") {
-          const cursor = command.cursor ?? account.startIndex;
+        if (!command || typeof command !== "object" || Array.isArray(command))
+          throw new Error("Enter an A2A action object.");
+        const requireRoom = (roomId) => {
+          const room = db.rooms.find((r) => r.id === roomId);
           if (
-            !Number.isInteger(cursor) ||
-            cursor < 0 ||
-            cursor > room.messages.length
+            !room ||
+            !access.canAccess(account.id, roomId) ||
+            !room.agentIds?.includes(account.id)
           )
-            throw new Error("Invalid message cursor.");
-          const start = Math.max(cursor, account.startIndex);
-          let end = Math.min(start + 100, room.messages.length);
-          // Do not advance past a shared reply that is still being streamed.
-          // Otherwise polling could permanently miss its final text.
-          for (let i = start; i < end; i++) {
-            const m = room.messages[i];
+            throw new Error("Conversation access denied.");
+          return room;
+        };
+        if (command.action === "list_rooms") {
+          result = { rooms: access.rooms(account, db.rooms) };
+        } else if (command.action === "next_dispatch") {
+          if (!broker)
+            throw new Error("Agent connector delivery is unavailable.");
+          if (command.roomId) requireRoom(command.roomId);
+          result = await broker.next(account, command);
+          // A long poll may outlive revocation or a membership change.
+          account = access.authenticate(ctx.context.user.authorization);
+          if (result.dispatch) {
+            const room = requireRoom(result.dispatch.roomId);
+            if (room.paused)
+              throw new Error("Conversation is paused by the owner.");
+            contextId = room.id;
+          }
+        } else if (command.action === "report_dispatch") {
+          if (!broker)
+            throw new Error("Agent connector delivery is unavailable.");
+          result = await broker.report(account, command);
+        } else {
+          const roomId =
+            command.roomId || ctx.userMessage.contextId || account.roomId;
+          const room = requireRoom(roomId);
+          // roomId is the Hub routing key. The A2A SDK creates its own
+          // context when a caller omits one, so do not treat that opaque
+          // protocol context as a second permission boundary.
+          contextId = room.id;
+          if (command.action === "read_messages") {
+            const startIndex = account.bindings[room.id];
+            const cursor = command.cursor ?? startIndex;
             if (
-              m.role === "agent" &&
-              m.shared &&
-              ["working", "submitted"].includes(m.state)
-            ) {
-              end = i;
-              break;
-            }
-          }
-          const messages = room.messages
-            .slice(start, end)
-            .filter(
-              (m) =>
-                m.role === "user" ||
-                (m.role === "agent" &&
-                  (m.shared || m.inboundAccountId) &&
-                  m.state === "completed"),
+              !Number.isInteger(cursor) ||
+              cursor < 0 ||
+              cursor > room.messages.length
             )
-            .map(({ id, name, role, text, createdAt }) => ({
-              id,
-              name,
-              role,
-              text,
-              createdAt,
-            }));
-          result = {
-            context_id: room.id,
-            messages,
-            next_cursor: end,
-            paused: room.paused,
-          };
-        } else if (command.action === "post_message") {
-          if (room.paused)
-            throw new Error("Conversation is paused by the owner.");
-          if (
-            typeof command.text !== "string" ||
-            !command.text.trim() ||
-            command.text.length > 12000
-          )
-            throw new Error("Enter 1–12,000 characters.");
-          const duplicate = room.messages.find(
-            (m) =>
-              m.inboundAccountId === account.id &&
-              m.clientMessageId === ctx.userMessage.messageId,
-          );
-          if (duplicate) {
-            if (duplicate.text !== command.text.trim())
-              throw new Error("messageId already used for different content.");
+              throw new Error("Invalid message cursor.");
+            const start = Math.max(cursor, startIndex);
+            const inAudience = (m) =>
+              !m.recipientIds ||
+              m.recipientIds.includes(account.id) ||
+              m.inboundAccountId === account.id ||
+              m.agentId === account.id;
+            let end = Math.min(start + 100, room.messages.length);
+            // Do not advance past a shared reply that is still being streamed.
+            // Otherwise polling could permanently miss its final text.
+            for (let i = start; i < end; i++) {
+              const m = room.messages[i];
+              if (
+                m.role === "agent" &&
+                m.shared &&
+                inAudience(m) &&
+                ["working", "submitted"].includes(m.state)
+              ) {
+                end = i;
+                break;
+              }
+            }
+            const messages = room.messages
+              .slice(start, end)
+              .filter(
+                (m) =>
+                  inAudience(m) &&
+                  (m.role === "user" ||
+                    (m.role === "agent" &&
+                      (m.shared ||
+                        m.inboundAccountId === account.id ||
+                        m.agentId === account.id) &&
+                      m.state === "completed")),
+              )
+              .map(({ id, name, role, text, createdAt }) => ({
+                id,
+                name,
+                role,
+                text,
+                createdAt,
+              }));
             result = {
-              message_id: duplicate.id,
               context_id: room.id,
-              duplicate: true,
+              messages,
+              next_cursor: end,
+              paused: room.paused,
             };
-          } else {
-            const message = {
-              id: randomUUID(),
-              role: "agent",
-              name: account.name,
-              text: command.text.trim(),
-              state: "completed",
-              shared: true,
-              inboundAccountId: account.id,
-              clientMessageId: ctx.userMessage.messageId,
-              createdAt: new Date().toISOString(),
-            };
-            room.messages.push(message);
-            publish();
-            result = { message_id: message.id, context_id: room.id };
-          }
-        } else
-          throw new Error("Unknown action. Use read_messages or post_message.");
+          } else if (command.action === "post_message") {
+            if (room.paused)
+              throw new Error("Conversation is paused by the owner.");
+            if (
+              typeof command.text !== "string" ||
+              !command.text.trim() ||
+              command.text.length > 12000
+            )
+              throw new Error("Enter 1–12,000 characters.");
+            const duplicate = room.messages.find(
+              (m) =>
+                m.inboundAccountId === account.id &&
+                m.clientMessageId === ctx.userMessage.messageId,
+            );
+            if (duplicate) {
+              if (duplicate.text !== command.text.trim())
+                throw new Error(
+                  "messageId already used for different content.",
+                );
+              result = {
+                message_id: duplicate.id,
+                context_id: room.id,
+                duplicate: true,
+              };
+            } else {
+              const message = {
+                id: randomUUID(),
+                role: "agent",
+                name: account.name,
+                text: command.text.trim(),
+                state: "completed",
+                shared: !!room.agentChat,
+                agentId: account.id,
+                recipientIds: room.agentChat
+                  ? [...room.agentIds]
+                  : [account.id],
+                inboundAccountId: account.id,
+                clientMessageId: ctx.userMessage.messageId,
+                createdAt: new Date().toISOString(),
+              };
+              room.messages.push(message);
+              onPost?.(room, message);
+              publish();
+              result = { message_id: message.id, context_id: room.id };
+            }
+          } else
+            throw new Error(
+              "Unknown action. Use list_rooms, read_messages, post_message, next_dispatch or report_dispatch.",
+            );
+        }
       } catch (error) {
         result = { error: error.message };
       }
@@ -169,7 +240,7 @@ export function mountInbound(app, { access, db, publish, origin }) {
         AgentEvent.message({
           messageId: randomUUID(),
           role: Role.ROLE_AGENT,
-          contextId: account.roomId,
+          contextId,
           taskId: "",
           parts: [
             {

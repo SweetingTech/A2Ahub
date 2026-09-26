@@ -8,6 +8,7 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 
 - `src/main.jsx`: chat, recipient selection, agent registration, and connection inspection.
 - `src/style.css`: responsive interface styles.
+- `src/workspace.jsx`: shared navigation, owner profile, directory, and membership picker.
 - `server/index.js`: API, event stream, room settings, and atomic JSON persistence.
 - `server/chat.js`: concurrent group-chat workers, bounded discussion bursts, Continue, and Stop.
 - `server/protocol.js`: A2A discovery, version-specific wire formats, streaming, polling, and cancellation.
@@ -15,10 +16,14 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - `test/chat.test.js`: scheduler tests for concurrency, request limits, audience boundaries, Continue, and Stop.
 - `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access.
 - `scripts/a2a-client.mjs`: private device-authorization client and A2A read/post helper.
+- `scripts/a2a-connect.mjs`, `server/dispatch.js`: outbound agent connector and single-claim dispatch broker.
+- `test/workflow.test.js`, `test/dispatch.test.js`: reusable-agent, history, remote-listener, and dispatch regressions.
 
 ## Behavioral constraints
 
-- Keep the server bound to loopback and preserve host/origin validation. Public hosting or multi-user access requires a separately designed authentication boundary.
+- Keep owner login, workspace, and administrative routes bound to loopback and preserve host/origin validation. An explicitly configured separate agent listener may expose only device bootstrap, the agent card, and authenticated A2A. Never mount owner APIs or the frontend on that listener. Public multi-user hosting remains out of scope.
+- Treat approved accounts as reusable directory identities. Room membership is explicit and independent of approval; approval need not choose a room. Preserve one identity across rooms, honest approved/online/offline states, and universal navigation. Do not require endpoint details when adding an existing identity.
+- Optional initial-room approval must recheck capacity and active work when the credential is collected. Fall back to directory-only for an unavailable room, and keep reply allowance large enough for all admitted members. Owner streams must stop at logout and revalidate before every snapshot.
 - Group chat is the default for new rooms. Send only to explicitly selected room members. Preserve the option to disable peer-triggered replies.
 - Each human message or explicit Continue starts a bounded discussion burst of at most six Hub requests. Dispatch different agents concurrently, serialize each agent’s context, and keep the composer usable while they respond. Only one room may have active agents across tabs.
 - Stop agents pauses the entire room and clears all queued requests. Continue may explicitly resume a bounded discussion; Resume agents alone must never start work. Human messages supersede queued autonomous chatter.
@@ -27,6 +32,9 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - Do not imply request limits guarantee a dollar budget or constrain an agent's internal tool use.
 - Preserve A2A 1.0 and 0.3 JSON-RPC differences: methods, role/part formats, wrappers, task states, and tenant routing. Do not blindly resend a request using a different protocol after a failure; it could duplicate paid work.
 - Keep per-room, per-agent contexts distinct. Persist audience IDs and delivery markers; never expose old messages to newly added members or forward private-mode replies as shared history.
+- Removal and re-addition reset both the history boundary and native context. Preserve explicit contexts only for continuing membership. Progress reports must remain nonterminal until a completion report arrives.
+- Manual inbound posts may use only an existing human-started remaining allowance and cannot wake their author, resume a paused room, or create a new burst. Connector polling does not itself authorize model work.
+- Dispatch claims are single-use and account/room/connector/lease scoped. Revalidate membership and revocation after long polls and before reports. Never redeliver uncertain claimed work after a transport error or restart.
 - Tools without an A2A endpoint need an adapter. A Codex task is not itself an A2A server.
 
 ## Credentials and persistence
@@ -47,11 +55,13 @@ npm test
 npm run build
 ```
 
-The default app port is 4317. Integration tests use port 4318 and disposable directories under `work/`; tests must not touch the user's real workspace data or require paid models. Check for existing listeners before starting another server; do not terminate unrelated processes.
+The default owner port is 4317. Integration tests use isolated ports and disposable directories under `work/`; tests must not touch the user's real workspace data or require paid models. Check for existing listeners before starting another server; do not terminate unrelated processes. For the installed Windows app, use the user's existing Startup launcher instead of leaving a temporary Codex-terminal process as the real server.
 
 Run tests relevant to changes and a production build before handoff. Add meaningful regression coverage when changing protocol, persistence, limits, or cancellation. For UI changes, verify actual desktop and mobile behavior, accessibility, connection errors, and browser console health. Preserve the design documented in `design/QA.md` unless the requested change calls for redesign.
 
 For group-chat UI verification, use delayed local mock agents and a disposable `A2AHUB_DATA_DIR` on an unused loopback port. Exercise concurrent replies, human interjections, the six-request cap, Continue, Stop from another tab, cleared queues, and Resume without new requests. Check desktop and narrow mobile layouts, membership after reload, and the mobile connection inspector. Keep screenshots and temporary browser scripts outside tracked source.
+
+`node test/fixtures/ui-workflow.mjs` starts a disposable production UI with two approved mock connectors. Use it to verify plus-picker reuse, desktop drag, mobile Add, navigation, rename, profile, drafts, login/logout, and errors. Use the user's existing browser when requested. Close fixture processes after verification. Distinguish mock, live single-agent, and actual multi-computer coverage in reports.
 
 Preserve keyboard access to the connection dialog after failed discovery: disabling the submit button can move focus to the document body. Escape must still dismiss the dialog, Tab and Shift+Tab must recover focus inside it, and closing must restore focus to the opener. Record expected failed-request console entries separately from unexpected runtime errors.
 

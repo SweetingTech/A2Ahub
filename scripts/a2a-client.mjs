@@ -16,15 +16,16 @@ const command = args[0],
   name = option("name", "Hermes");
 const base = new URL(option("url", "http://127.0.0.1:4317"));
 if (
-  !["127.0.0.1", "localhost"].includes(base.hostname) ||
-  base.protocol !== "http:" ||
+  !["http:", "https:"].includes(base.protocol) ||
   base.username ||
   base.password ||
   base.search ||
   base.hash ||
   base.pathname !== "/"
 )
-  throw new Error("Use this computer's loopback Hub origin.");
+  throw new Error(
+    "Use an HTTP(S) Hub origin without a path, credentials, query, or fragment.",
+  );
 const origin = base.origin;
 const dir = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), ".local", "share"),
@@ -76,9 +77,9 @@ async function main() {
     }
     throw new Error("Approval request expired.");
   }
-  if (!["read", "say"].includes(command))
+  if (!["read", "say", "rooms"].includes(command))
     throw new Error(
-      "Usage: node scripts/a2a-client.mjs auth|read|say --name Hermes --url http://127.0.0.1:4317 [--cursor N]. For say, pipe message text on stdin.",
+      "Usage: node scripts/a2a-client.mjs auth|rooms|read|say --name Hermes --url http://127.0.0.1:4317 [--room ID] [--cursor N]. For say, pipe message text on stdin.",
     );
   if (!fs.existsSync(file))
     throw new Error("No credential for this name and Hub. Run auth first.");
@@ -94,15 +95,18 @@ async function main() {
     transports: [new JsonRpcTransportFactory({ fetchImpl: authFetch })],
   }).createFromUrl(origin);
   const data =
-    command === "read"
-      ? { action: "read_messages", cursor: Number(option("cursor", "0")) }
-      : { action: "post_message", text: fs.readFileSync(0, "utf8") };
+    command === "rooms"
+      ? { action: "list_rooms" }
+      : command === "read"
+        ? { action: "read_messages", cursor: Number(option("cursor", "0")) }
+        : { action: "post_message", text: fs.readFileSync(0, "utf8") };
   const response = await client.sendMessage({
     tenant: "",
     message: {
       messageId: randomUUID(),
       role: Role.ROLE_USER,
-      contextId: credential.context_id,
+      contextId:
+        command === "rooms" ? "" : option("room", credential.context_id || ""),
       taskId: "",
       parts: [
         {

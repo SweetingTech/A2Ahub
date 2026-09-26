@@ -3,8 +3,22 @@ import { randomUUID } from "node:crypto";
 // Each human message owns a bounded burst. Workers are independent between
 // agents, but serialized for one agent so its remote context cannot race.
 export class GroupChat {
-  constructor({ send, cancel, publish, redact, timeoutMs = 180000 }) {
-    Object.assign(this, { send, cancel, publish, redact, timeoutMs });
+  constructor({
+    send,
+    cancel,
+    publish,
+    redact,
+    timeoutMs = 180000,
+    ownerName = () => "You",
+  }) {
+    Object.assign(this, {
+      send,
+      cancel,
+      publish,
+      redact,
+      timeoutMs,
+      ownerName,
+    });
     this.runs = new Map();
     this.queues = new Map();
     this.workers = new Map();
@@ -75,7 +89,12 @@ export class GroupChat {
         agents.map((a) => [
           a.id,
           recent
-            .filter((m) => m.recipientIds?.includes(a.id) && m.agentId !== a.id)
+            .filter(
+              (m) =>
+                m.recipientIds?.includes(a.id) &&
+                m.agentId !== a.id &&
+                room.messages.indexOf(m) >= (room.memberSince?.[a.id] || 0),
+            )
             .slice(-6),
         ]),
       );
@@ -124,7 +143,7 @@ export class GroupChat {
       : {
           id: randomUUID(),
           role: "user",
-          name: "You",
+          name: this.ownerName(),
           text,
           recipients: agents.map((a) => a.name),
           recipientIds: run.agentIds,
@@ -132,7 +151,7 @@ export class GroupChat {
           state: "sent",
         };
     room.messages.push(message);
-    if (!continuing && room.messages.length === 1)
+    if (!continuing && room.messages.length === 1 && !room.customTitle)
       room.title = text.slice(0, 45);
     for (const agent of agents) {
       if (continuing) {
@@ -161,6 +180,40 @@ export class GroupChat {
     run.pending.add(job);
     if (!this.queues.has(agent.id)) this.queues.set(agent.id, []);
     this.queues.get(agent.id).push(job);
+  }
+
+  // A participant's manual post can spend only the allowance already granted by
+  // the latest human turn. It never creates or replenishes a discussion budget.
+  relayPost(room, message) {
+    if (
+      room.paused ||
+      !room.agentChat ||
+      !message.shared ||
+      this.active().some((r) => r.roomId !== room.id)
+    )
+      return;
+    const run = [...this.runs.values()].findLast((r) => r.roomId === room.id);
+    if (
+      !run ||
+      !run.allowPeers ||
+      !["running", "completed", "completed-with-errors"].includes(run.state) ||
+      run.used >= run.maxTurns ||
+      !run.agentIds.includes(message.agentId)
+    )
+      return;
+    const peers = run.agents.filter(
+      (a) =>
+        a.id !== message.agentId &&
+        room.agentIds.includes(a.id) &&
+        message.recipientIds?.includes(a.id) &&
+        !run.blocked.has(a.id),
+    );
+    if (!peers.length) return;
+    run.state = "running";
+    for (const peer of peers) this.enqueue(run, peer, message);
+    this.finish(run);
+    this.publish();
+    this.pump();
   }
 
   drop(job) {
@@ -230,6 +283,8 @@ export class GroupChat {
                 m.state === "completed" &&
                 m.agentId !== agent.id &&
                 m.recipientIds?.includes(agent.id) &&
+                run.room.messages.indexOf(m) >=
+                  (run.room.memberSince?.[agent.id] || 0) &&
                 !m.deliveredTo?.includes(agent.id),
             )
             .slice(-6)
@@ -258,6 +313,7 @@ export class GroupChat {
           job.taskId = delta.taskId || job.taskId;
           this.publish();
         },
+        { roomId: run.room.id, runId: run.id, messageId: message.id },
       );
       // A late result after Stop cannot revive a conversation or alter context.
       if (run.state !== "running" || job.controller.signal.aborted) return;
@@ -320,6 +376,9 @@ export class GroupChat {
 
   async stop(room) {
     room.paused = true;
+    // Stop seals unused allowances too, so Resume cannot revive an old burst.
+    for (const run of this.runs.values())
+      if (run.room.id === room.id) run.allowPeers = false;
     const runs = this.active(room.id);
     const jobs = [];
     for (const run of runs) {
