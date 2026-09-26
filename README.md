@@ -11,7 +11,7 @@ Create a group chat with selected agents, keep a persistent local transcript, an
 ## Moving to another computer
 
 See [the migration guide](docs/MIGRATION.md) for reproducible setup, private data
-transfer, and the checked-in Windows startup launcher from the original host.
+transfer, and this app's independent [Windows launcher](deployment/windows/Start-A2Ahub.ps1).
 
 ## Run
 

@@ -22,8 +22,7 @@ For an existing clean clone, run `git pull --ff-only` first. Open
 Tests use disposable data and mock agents; they do not send paid model requests.
 
 On the original Windows host, all 84 tests and the production build passed on
-2026-09-26 before this handoff. The archived launcher also passed PowerShell
-syntax validation and matched the installed script's SHA-256 exactly.
+2026-09-26 before this handoff. That baseline predates the separate launcher described below.
 
 ## Transfer private state separately
 
@@ -48,29 +47,42 @@ the destination is verified, and restore owner-only permissions there.
 Never commit this private state or credentials. Reinstall dependencies and rebuild
 on the destination instead of copying `node_modules`, `dist` or temporary `work`.
 
-## Preserved Windows startup setup
+## Independent Windows launcher
 
-[Start-A2A-RepoManager.ps1](../deployment/windows/Start-A2A-RepoManager.ps1) is an
-exact snapshot of the working combined launcher on the original Windows host.
-The same snapshot is kept in both app repos so neither clone depends on an
-untracked file left on the old computer. It starts native Node processes.
+Run this repository's own launcher after npm ci and npm run build:
 
-This is a **machine-specific reference**, not an installer. Before using a copy
-on another Windows host, update both repository roots, the Node executable path
-and the PATH entries for Node/pnpm. Both repositories and dependencies must exist.
-For other operating systems, use the foreground commands above.
+```powershell
+.\deployment\windows\Start-A2Ahub.ps1
+```
 
-Original installation:
+[Start-A2Ahub.ps1](../deployment/windows/Start-A2Ahub.ps1) starts only **A2Ahub**.
+It finds the checkout relative to its own location and resolves Node from PATH.
+Keep it inside `deployment/windows`; it works after cloning to another directory,
+including paths with spaces. The launcher serves the previously built frontend through server/index.js.
+No other application repository is required.
 
-- Launcher: `%LOCALAPPDATA%/A2A-RepoManager-Startup/Start-A2A-RepoManager.ps1`
-- Logs: `%LOCALAPPDATA%/A2A-RepoManager-Startup/logs/`
-- Sign-in shortcut: `A2A and RepoManager.lnk` in the user's Windows Startup folder.
-  It launches Windows PowerShell with the script passed through `-File`.
+Logs go under `%LOCALAPPDATA%/A2Ahub/launcher/<checkout-id>/`, with separate files
+for each start. Override with `-LogDirectory "D:\AppLogs\A2Ahub"` if needed.
+Environment settings described above are inherited by the child process.
+Concurrent launcher calls use a checkout-specific lock; an existing Node process
+for this checkout's exact entry path is not started again. Manually launched
+relative-path commands may not be identifiable, so use one launch method per
+checkout. A detected process is not an application health check.
 
-The script only starts missing apps at sign-in. It checks process command lines,
-not application health, and does not restart crashed apps. A service manager for
-continuous hosting is separate future work on the destination. This handoff does
-not change the original installation or install services, proxies or containers.
+To launch at Windows sign-in, create a shortcut in your user's Startup folder
+that invokes PowerShell with `-NoProfile -NonInteractive -WindowStyle Hidden
+-File "<checkout>\deployment\windows\Start-A2Ahub.ps1"`. Use the destination's normal
+script-execution policy. The launcher itself does not install a shortcut or
+change this computer's existing startup setup.
+
+The previous combined launcher has been removed from this repository; its
+historical copy remains in Git history. When moving, replace the old combined
+startup entry with the separate app launchers to avoid competing launch methods.
+
+These scripts start native Windows processes and report early startup failures.
+They do not supervise health or restart crashes. A reverse proxy routes traffic;
+a service manager remains separate destination setup. For other operating
+systems use the foreground commands above with that host's service manager.
 
 ## Cut over after verification
 
