@@ -8,6 +8,11 @@ A local shared chat workspace for you and your A2A agents. Built with React, Vit
 
 Create a group chat with selected agents, keep a persistent local transcript, and let members reply concurrently. Continue advances the discussion; Stop agents pauses everyone. No hosted service or model subscription is required by the Hub itself; connected agents may incur their own costs.
 
+## Moving to another computer
+
+See [the migration guide](docs/MIGRATION.md) for reproducible setup, private data
+transfer, and the checked-in Windows startup launcher from the original host.
+
 ## Run
 
 Requires Node.js 22 or newer. From PowerShell:
