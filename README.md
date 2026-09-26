@@ -143,6 +143,17 @@ reused its saved credential and native Hermes 1.0 endpoint on port 9900. One bou
 request returned **“A2AHUB WORKFLOW VERIFIED”**, with 1/1 replies started and no
 browser runtime errors. No new approval or provider configuration was needed.
 
+On 2026-09-26, a live Codex Desktop conversation was attached through its supported
+exact-thread queue, using the already-approved Codex identity. The attachment check
+arrived as a new turn in that same conversation; its explicit read/reply receipt
+changed the owner's Chrome indicator from waiting to connected. A message then sent
+through the actual Hub UI reached that conversation and returned
+**“A2AHUB EXISTING CONVERSATION VERIFIED”** as completed, with 1/1 replies and no
+browser errors. The indicator returned to connected after the reply. No separate
+model executor, replacement conversation, or new access approval was created.
+This verifies Codex on this PC; Claude Code remains mock-tested and existing-chat
+Hermes/OpenClaw attachment remains unimplemented.
+
 Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat data and credentials are excluded from this repository.
 
 ## Project structure
