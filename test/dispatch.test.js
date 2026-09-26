@@ -48,6 +48,34 @@ function setup(t, overrides = {}) {
   return { broker, allowed, poll, report };
 }
 
+test("Hermes existing-session binding requires receipt before becoming connected", async (t) => {
+  const { broker, poll } = setup(t);
+  const receiver = {
+    kind: "session",
+    harness: "hermes",
+    sessionId: "ab123456",
+    roomId: "room-a",
+    state: "awaiting-confirmation",
+    lastReceiptAt: null,
+  };
+  await poll({ receiver, roomId: "room-a" });
+  assert.equal(broker.status(account.id), "approved");
+  await assert.rejects(
+    broker.send(agent, "hello", {}, null, null, { roomId: "room-a" }),
+    /Waiting for the selected conversation/,
+  );
+  await poll({
+    roomId: "room-a",
+    receiver: {
+      ...receiver,
+      state: "ready",
+      lastReceiptAt: new Date().toISOString(),
+    },
+  });
+  assert.equal(broker.status(account.id), "connected");
+  assert.equal(broker.receiver(account.id).harness, "hermes");
+});
+
 test("approved is distinct from connected; offline sends do not queue or replay", async (t) => {
   let now = 0,
     changes = 0;

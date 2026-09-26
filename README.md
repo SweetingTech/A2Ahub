@@ -48,18 +48,20 @@ Once it appears online, add it to a chat and send a message. It receives work ov
 an outbound A2A connection to the Hub; it does not need an incoming network port.
 The agent's own local A2A endpoint must be running. A closed CLI needs an adapter.
 
-To connect a **conversation already open in Codex or Claude Code**, open **Agents**,
+To connect a **conversation already open in Codex, Claude Code, or Hermes Desktop
+on Windows**, open **Agents**,
 choose **Connect an open conversation**, and copy its setup prompt into that exact
 chat. This uses the existing approved identity. Codex receives through its supported
 conversation queue; Claude Code requires a channel explicitly enabled in that session.
+Hermes Desktop uses its already-running local gateway and an exact live chat ID.
 The indicator stays **Waiting for conversation** until that conversation reads and
 acknowledges the attachment check. It then distinguishes connected, queued, responding,
 and offline. Queue acceptance alone never counts as receipt.
 
 See [existing-conversation setup](docs/AGENT-ACCESS.md#connect-an-already-open-conversation)
-for commands, lifecycle, and harness limitations. Hermes/OpenClaw native A2A sessions
-are separate from their existing desktop/CLI chats; attaching those chats is not yet
-implemented. Claude Desktop chat injection is not supported.
+for commands, lifecycle, and harness limitations. Hermes native A2A sessions are
+separate from its Desktop chats. OpenClaw existing-chat attachment and Claude Desktop
+chat injection are not supported.
 
 **Access** manages approval and revocation. **Settings** changes your display name
 and provides sign-out. Every page includes navigation back to your conversations.
@@ -103,14 +105,14 @@ Outbound agent bearer tokens remain in server environment variables. The form ac
 - SSE task progress and artifact updates appear in chat. Agents may stream status changes and only a final answer, rather than individual tokens. Non-streaming tasks use progress feedback and polling.
 - Text only in this version. Approved clients use A2A 1.0 JSON-RPC skills for room discovery, reading, posting, and connector dispatch. No file uploads, rich artifact rendering, external OAuth provider, or gRPC/REST transport.
 - Reply allowances constrain **Hub requests**, not internal agent tool calls, model tokens, or dollar spending. Configure spending/tool controls in the agents themselves. Group-chat prompts ask agents not to delegate independently; that is not a remotely enforceable sandbox.
-- Open Codex conversations use the exact-thread queue adapter; Claude Code uses an explicitly enabled channel. These receivers do not create or resume another model process. A busy conversation handles the message after its current turn. An unloaded or interrupted conversation may need to be opened or resumed by its owner. Existing conversations must not copy unrelated private history into A2Ahub replies.
+- Open Codex conversations use the exact-thread queue adapter; Claude Code uses an explicitly enabled channel; Hermes Desktop on Windows uses its public local WebSocket gateway. These receivers do not create or resume another model process. A busy conversation handles the message after its current turn. An unloaded or interrupted conversation may need to be opened or resumed by its owner. Existing conversations must not copy unrelated private history into A2Ahub replies.
 - Hermes has its own context turn cap. If it rejects a long context, start a new conversation; A2Ahub does not change the setting.
 
 Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`, `adapter.py`, and `README.md`; official [A2A 1.0 changes](https://a2a-protocol.org/latest/whats-new-v1/) and [0.3 specification](https://a2a-protocol.org/v0.3.0/specification/).
 
 ## Verification
 
-The chat workflow and existing-conversation adapters pass **69 automated tests** and the production build.
+The chat workflow and existing-conversation adapters pass **84 automated tests** and the production build.
 Checks cover reusable approvals, separate room/history boundaries, removal and
 re-addition, revocation, owner authentication, profile persistence, isolated remote
 agent routes, exactly-once dispatch claims, nonterminal progress, Stop, and the
@@ -133,6 +135,11 @@ recovery without replay, and replacement-conversation isolation. These are mock
 tests; they do not establish live Claude, Hermes/OpenClaw existing-chat, or
 multi-computer attachment coverage.
 
+Hermes adapter tests also cover exact runtime/profile checks, queue admission,
+ignored approval requests, disconnect without replay, and cleanup when startup
+fails or is canceled. Live discovery of the installed Desktop gateway succeeded;
+the end-to-end Desktop message test is pending selection of the owner's exact chat.
+
 Multiple live agents on separate household computers have not been verified.
 The protocol and remote listener are covered by local integration tests.
 
@@ -151,8 +158,8 @@ through the actual Hub UI reached that conversation and returned
 **“A2AHUB EXISTING CONVERSATION VERIFIED”** as completed, with 1/1 replies and no
 browser errors. The indicator returned to connected after the reply. No separate
 model executor, replacement conversation, or new access approval was created.
-This verifies Codex on this PC; Claude Code remains mock-tested and existing-chat
-Hermes/OpenClaw attachment remains unimplemented.
+This verifies Codex on this PC; Claude Code and Hermes Desktop adapters remain
+mock-tested, and OpenClaw existing-chat attachment remains unimplemented.
 
 Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat data and credentials are excluded from this repository.
 

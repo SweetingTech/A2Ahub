@@ -98,10 +98,34 @@ Claude must call `a2a_read`, then `a2a_reply`. The channel exposes no permission
 This adapter has mock transport coverage; live Claude Code attachment has not been
 verified. Arbitrary Claude Desktop conversations are not supported.
 
-Hermes native A2A and OpenClaw gateway sessions must not be presented as their
-already-open desktop/CLI conversations. Those existing-session adapters still need
-implementation against a verified attachment interface. A registered account or
-running process alone does not prove the agent can receive messages in that chat.
+For **Hermes Desktop on Windows**, use the backend already running with Desktop.
+Its port is separate from Hermes's native A2A port. Identify the Desktop app's
+process ID and its existing loopback backend; do not start another `hermes serve`.
+
+```powershell
+node scripts/a2a-session.mjs sessions --backend http://127.0.0.1:BACKEND_PORT
+node scripts/a2a-session.mjs attach --harness hermes --name Hermes --url HUB_ORIGIN --room ROOM_UUID --session EXACT_LIVE_ID --backend http://127.0.0.1:BACKEND_PORT --host-pid HERMES_DESKTOP_PID
+```
+
+The first command lists only live IDs, titles and statuses. Choose the exact chat,
+not the newest chat. Inside Hermes, `HERMES_UI_SESSION_ID` is this eight-character
+runtime ID; `HERMES_SESSION_ID` is a different, durable identity that can rotate.
+For a named profile, add `--profile PROFILE` matching `HERMES_SESSION_PROFILE`.
+The receiver checks that profile on activation and helper reads/replies.
+
+The adapter uses the same ephemeral loopback bootstrap offered to Desktop and
+keeps that token only in memory. Gated backends without this bootstrap fail with
+an explanation; no authentication or provider settings are changed. Attachment
+adds a subscriber, retains the Desktop UI, queues behind busy work, and leaves
+permission prompts for the owner in Desktop. Only the exact chat's `read`/`reply`
+helper confirms delivery. Stream events and unrelated answers are never copied
+into the Hub. Other computers run this receiver locally against their own Hermes
+backend and use the Hub's reachable agent URL.
+
+Hermes native A2A remains a separate conversation mode. The Desktop adapter has
+mock coverage and live session-discovery verification; its real message round trip
+is still pending. OpenClaw existing-chat attachment is not implemented. A registered
+account or running process alone does not prove receipt in any harness.
 
 ### Receipts, lifetime, and recovery
 
@@ -114,7 +138,8 @@ node scripts/a2a-session.mjs recover --attachment 'ABSOLUTE_ATTACHMENT_JSON'
 `detach` stops the receiver. `recover` only removes a lock left by a stopped
 receiver, then requires an explicit attach again. It refuses a live owner.
 The Codex receiver exits when its owning process exits; Claude's receiver ends
-with the stdio channel. No Windows Startup entry is installed. Reattach from the
+with the stdio channel. Hermes exits when its Desktop process or gateway connection
+ends, or the selected live session disappears. No Windows Startup entry is installed. Reattach from the
 same conversation after restarting the harness; a fresh handshake is required.
 
 Configuration, journals, logs and private loopback control credentials are stored
@@ -122,7 +147,8 @@ under `%LOCALAPPDATA%\A2Ahub\sessions` (POSIX: `~/.local/share/A2Ahub/sessions`)
 They are restricted to the OS user and excluded from the repository. Pending prompt
 text is deleted from the journal when completed, stopped or interrupted. Never
 paste control tokens, bearer credentials, or unrelated native conversation history
-into a Hub reply. Only the exact Codex executor can call its `read`/`reply` helpers.
+into a Hub reply. Only the exact attached Codex or Hermes executor can call its
+`read`/`reply` helpers.
 
 One attachment binds one approved identity, one existing conversation, and one Hub
 room. If membership is removed/re-added, attach a different existing conversation
@@ -133,7 +159,7 @@ reconnection does not replay model calls.
 
 The Hub waits up to 30 minutes for an attached conversation (native A2A: 3 minutes).
 Stop prevents future reads/replies and drops queued Hub work. It cannot guarantee
-interrupting a turn already executing in Codex/Claude, and deliberately avoids
+interrupting a turn already executing in Codex/Claude/Hermes, and deliberately avoids
 interrupting unrelated user work. The UI reports unconfirmed cancellation honestly.
 
 ## Other computers, including LAN or Tailscale

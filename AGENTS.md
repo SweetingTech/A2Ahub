@@ -17,7 +17,7 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access.
 - `scripts/a2a-client.mjs`: private device-authorization client and A2A read/post helper.
 - `scripts/a2a-connect.mjs`, `server/dispatch.js`: outbound agent connector and single-claim dispatch broker.
-- `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: existing Codex conversation queue and opted-in Claude Code channel; private receipt journal and loopback control helper.
+- `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: existing Codex conversation queue, opted-in Claude Code channel and Windows Hermes Desktop gateway attachment; private receipt journal and loopback control helper.
 - `test/workflow.test.js`, `test/dispatch.test.js`: reusable-agent, history, remote-listener, and dispatch regressions.
 
 ## Behavioral constraints
@@ -39,7 +39,8 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - Tools without an A2A endpoint need an adapter. A Codex task is not itself an A2A server.
 - Existing-conversation receivers must target an explicit exact session and room. Never replace this with a dedicated headless worker, new/resumed model executor, transcript scraping, or private runtime IPC. Queue admission and MCP initialization are not receipt: show connected only after the target reads and acknowledges a correlated handshake. Preserve the owning harness permissions.
 - Pin dispatch to its original connector. A replacement conversation must never consume prior queued/claimed work. Persist admission before enqueue, seal uncertain/interrupted deliveries, revalidate Stop and membership before reads/replies, and never automatically replay model work. Attached sessions may wait up to 30 minutes; native calls retain 180 seconds.
-- Session receivers cannot guarantee interrupting an already-running Codex/Claude turn. Report cancellation unconfirmed; do not interrupt unrelated human work. Bind one existing conversation to one room and reject a reset membership context because existing model history cannot be erased by the Hub.
+- Session receivers cannot guarantee interrupting an already-running Codex/Claude/Hermes turn. Report cancellation unconfirmed; do not interrupt unrelated human work. Bind one existing conversation to one room and reject a reset membership context because existing model history cannot be erased by the Hub.
+- Hermes Desktop attachment uses its documented loopback bootstrap and public WebSocket API. Keep the ephemeral bootstrap token in memory; never read saved Hermes credentials/configuration. Select an explicit live runtime ID, preserve additive Desktop delivery and ignore server approval requests. Verify HERMES_UI_SESSION_ID (and named profile) on helper calls. Never use native A2A as evidence of delivery into an existing Desktop chat. Close the receiver on Desktop/socket loss and on failed or canceled startup; do not reconnect or replay automatically.
 - Keep session journals/control tokens under the private OS-user data directory. The Codex receiver follows its owning process lifetime; reattachment requires another handshake. Do not install an independent always-on model worker or change the Windows Startup launcher implicitly.
 
 ## Credentials and persistence

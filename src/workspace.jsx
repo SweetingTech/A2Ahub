@@ -13,6 +13,11 @@ import {
 } from "lucide-react";
 
 export const AGENT_DRAG_TYPE = "application/x-a2ahub-agent";
+const harnessNames = {
+  codex: "Codex",
+  "claude-code": "Claude Code",
+  hermes: "Hermes",
+};
 export const pages = [
   { path: "/", title: "Conversations", icon: MessageCircle },
   { path: "/agents", title: "Agents", icon: Users },
@@ -59,7 +64,7 @@ export function statusText(agent) {
     if (agent.status !== "connected") return "Conversation offline";
     if (agent.receiver.state === "queued") return "Message queued";
     if (agent.receiver.state === "working") return "Responding";
-    return `Connected to ${agent.receiver.harness === "codex" ? "Codex" : "Claude Code"} conversation`;
+    return `Connected to ${harnessNames[agent.receiver.harness] || "agent"} conversation`;
   }
   if (agent.kind === "inbound")
     return agent.status === "connected"
@@ -102,7 +107,7 @@ function ConversationSetup({
   const [error, setError] = useState("");
   const [showPrompt, setShowPrompt] = useState(false);
   const preview = useRef(null);
-  const harnessName = harness === "codex" ? "Codex" : "Claude Code";
+  const harnessName = harnessNames[harness];
   useEffect(() => setOrigin(agentConnectionUrl), [agentConnectionUrl]);
   useEffect(() => {
     if (setupAgentName) setName(setupAgentName);
@@ -121,7 +126,9 @@ Read the A2Ahub repository's scripts/a2a-session.mjs --help first. Determine thi
 ${
   harness === "codex"
     ? "Use the attach command from this Codex conversation with --harness codex, the name/url/room above, --session matching the current CODEX_THREAD_ID, and --executable set to the actual absolute Codex executable path. The template is: node scripts/a2a-session.mjs attach --harness codex --name NAME --url HUB_ORIGIN --room ROOM_UUID --session EXACT_CURRENT_THREAD_UUID --executable ABS_CODEX_EXE. Resolve the placeholders and safely quote each literal argument. Do not launch a separate Codex executor."
-    : "Use the opted-in Claude Code stdio channel in this same existing conversation: node scripts/a2a-session.mjs channel --harness claude-code --name NAME --url HUB_ORIGIN --room ROOM_UUID --session EXACT_SESSION_UUID. Resolve the placeholders and safely quote each literal argument. Confirm this conversation actually supports the channel before changing anything. Explain any required channel configuration or restart and wait for my approval; do not silently edit harness configuration or open a replacement conversation."
+    : harness === "hermes"
+      ? "Use the existing Hermes Desktop backend on this Windows computer. Identify the running Desktop application's PID and its loopback backend origin without launching another process. Run node scripts/a2a-session.mjs sessions --backend BACKEND_ORIGIN, then select this exact chat by its HERMES_UI_SESSION_ID (an eight-character live runtime ID), not the durable HERMES_SESSION_ID or the most recent chat. Attach with: node scripts/a2a-session.mjs attach --harness hermes --name NAME --url HUB_ORIGIN --room ROOM_UUID --session EXACT_LIVE_ID --backend BACKEND_ORIGIN --host-pid HERMES_DESKTOP_PID. Include --profile matching HERMES_SESSION_PROFILE if this is a named profile. Safely quote literal arguments. Do not read saved credentials, alter provider settings, start or resume another session, or answer Desktop approval prompts on my behalf. If this chat or supported local gateway is unavailable, explain and stop."
+      : "Use the opted-in Claude Code stdio channel in this same existing conversation: node scripts/a2a-session.mjs channel --harness claude-code --name NAME --url HUB_ORIGIN --room ROOM_UUID --session EXACT_SESSION_UUID. Resolve the placeholders and safely quote each literal argument. Confirm this conversation actually supports the channel before changing anything. Explain any required channel configuration or restart and wait for my approval; do not silently edit harness configuration or open a replacement conversation."
 }
 
 Confirm the connection by acknowledging its handshake from this exact conversation, then verify a message and reply through A2Ahub. Report success only after that receipt and reply. If this harness cannot attach this live conversation, explain the limitation and stop; do not substitute a new worker or another session.`;
@@ -181,6 +188,7 @@ Confirm the connection by acknowledging its handshake from this exact conversati
             >
               <option value="codex">Codex</option>
               <option value="claude-code">Claude Code</option>
+              <option value="hermes">Hermes Desktop (Windows)</option>
             </select>
           </label>
           <label>
@@ -253,8 +261,8 @@ Confirm the connection by acknowledging its handshake from this exact conversati
       </details>
       <p className="setup-hint">
         Codex uses its conversation queue; Claude Code requires an opted-in
-        channel in the same chat. Hermes and OpenClaw need an adapter that
-        explicitly attaches their existing session.
+        channel in the same chat. Hermes Desktop on Windows uses its running
+        local gateway. OpenClaw still needs an existing-session adapter.
       </p>
     </section>
   );

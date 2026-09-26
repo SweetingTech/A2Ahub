@@ -218,7 +218,7 @@ export class DispatchBroker {
       if (
         !input ||
         input.kind !== "session" ||
-        !["codex", "claude-code"].includes(input.harness) ||
+        !["codex", "claude-code", "hermes"].includes(input.harness) ||
         !id(input.sessionId) ||
         !id(input.roomId) ||
         command.roomId !== input.roomId ||
