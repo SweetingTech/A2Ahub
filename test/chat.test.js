@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { GroupChat } from "../server/chat.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-function setup({ timeoutMs = 180000, ignoreAbort = false } = {}) {
+function setup({
+  timeoutMs = 180000,
+  sessionTimeoutMs = 1800000,
+  ignoreAbort = false,
+} = {}) {
   const calls = [],
     cancellations = [];
   const agents = ["Alpha", "Beta", "Gamma"].map((name) => ({
@@ -24,6 +28,7 @@ function setup({ timeoutMs = 180000, ignoreAbort = false } = {}) {
     publish: () => {},
     redact: (s) => s,
     timeoutMs,
+    sessionTimeoutMs,
     cancel: async (a, id) => {
       cancellations.push([a.id, id]);
       return true;
@@ -64,6 +69,24 @@ function setup({ timeoutMs = 180000, ignoreAbort = false } = {}) {
   };
   return { chat, calls, cancellations, room, agents, reply };
 }
+
+test("busy attached conversations have a bounded longer wait and remain stoppable", async () => {
+  const h = setup({ timeoutMs: 15, sessionTimeoutMs: 500 });
+  h.agents[0].receiver = { kind: "session" };
+  h.room.agentChat = false;
+  const run = h.chat.start(
+    h.room,
+    h.agents.slice(0, 2),
+    "Queued in an existing conversation",
+  );
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(h.calls[0].signal.aborted, false);
+  assert.equal(h.calls[1].signal.aborted, true);
+  await h.chat.stop(h.room);
+  assert.equal(h.calls[0].signal.aborted, true);
+  assert.equal(h.chat.active().length, 0);
+  assert.notEqual(run.state, "running");
+});
 
 test("re-added members cannot Continue old topics or receive peer backlog from prior membership", async () => {
   const h = setup();

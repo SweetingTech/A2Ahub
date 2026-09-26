@@ -9,6 +9,7 @@ export class GroupChat {
     publish,
     redact,
     timeoutMs = 180000,
+    sessionTimeoutMs = 1800000,
     ownerName = () => "You",
   }) {
     Object.assign(this, {
@@ -17,6 +18,7 @@ export class GroupChat {
       publish,
       redact,
       timeoutMs,
+      sessionTimeoutMs,
       ownerName,
     });
     this.runs = new Map();
@@ -261,11 +263,15 @@ export class GroupChat {
     run.room.messages.push(message);
     run.turn++;
     this.publish();
+    const responseTimeout =
+      agent.receiver?.kind === "session"
+        ? this.sessionTimeoutMs
+        : this.timeoutMs;
     const timer = setTimeout(() => {
       job.timedOut = true;
       job.controller.abort();
       job.cancellation = this.cancelJob(job);
-    }, this.timeoutMs);
+    }, responseTimeout);
     try {
       if (agent.status !== "connected")
         throw new Error(
@@ -336,7 +342,7 @@ export class GroupChat {
       if (run.state === "running") {
         message.state = job.timedOut ? "timed-out" : "error";
         message.text ||= job.timedOut
-          ? "Response timed out after 180 seconds. Remote work may continue."
+          ? `Response timed out after ${Math.round(responseTimeout / 1000)} seconds. Remote work may continue.`
           : this.redact(error.message, agent);
         run.blocked.add(agent.id);
         run.errors = true;

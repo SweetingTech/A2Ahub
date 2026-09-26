@@ -70,6 +70,67 @@ test("approved is distinct from connected; offline sends do not queue or replay"
   assert.equal((await poll()).dispatch, null);
 });
 
+test("replacement conversation cannot take or report work intended for an expired receiver", async (t) => {
+  let now = 0;
+  const { broker, poll } = setup(t, { now: () => now, presenceMs: 50 });
+  const receiver = {
+    kind: "session",
+    harness: "codex",
+    sessionId: "original-chat",
+    roomId: "room-a",
+    state: "ready",
+    lastReceiptAt: new Date().toISOString(),
+  };
+  await poll({ receiver, roomId: "room-a" });
+  const pending = broker.send(
+    agent,
+    "original target only",
+    {},
+    null,
+    () => {},
+    { roomId: "room-a" },
+  );
+  const rejected = assert.rejects(
+    pending,
+    /original conversation receiver disconnected/,
+  );
+  now = 51;
+  const replacement = await poll({
+    connectorId: "new-connector",
+    roomId: "room-a",
+    receiver: { ...receiver, sessionId: "replacement-chat" },
+  });
+  assert.equal(replacement.dispatch, null);
+  await rejected;
+  assert.equal(broker.receiver(account.id).sessionId, "replacement-chat");
+});
+
+test("unconfirmed conversation holds connection ownership but cannot claim work or change its target", async (t) => {
+  const { broker, poll } = setup(t);
+  const receiver = {
+    kind: "session",
+    harness: "codex",
+    sessionId: "this-chat",
+    roomId: "room-a",
+    state: "awaiting-confirmation",
+    lastReceiptAt: null,
+  };
+  await poll({ receiver, roomId: "room-a" });
+  assert.equal(broker.status(account.id), "approved");
+  await assert.rejects(poll({ connectorId: "other" }), /already owns/);
+  await assert.rejects(
+    poll({ receiver: { ...receiver, state: "ready" }, roomId: "room-a" }),
+    /receipt is required/,
+  );
+  await assert.rejects(
+    poll({
+      receiver: { ...receiver, sessionId: "another-chat" },
+      roomId: "room-a",
+    }),
+    /cannot switch/,
+  );
+});
+
 test("dispatch is claimed once, scopes account/room and preserves native context", async (t) => {
   const { broker, poll, report } = setup(t);
   await poll();

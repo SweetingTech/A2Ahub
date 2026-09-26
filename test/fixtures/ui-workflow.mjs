@@ -19,8 +19,10 @@ const children = [],
   servers = [],
   controllers = [];
 const calls = [];
+const sessionFixture = process.argv.includes("--sessions");
+const sessionStates = ["awaiting-confirmation", "ready", "queued", "working"];
 const room = {
-  id: "qa-room",
+  id: randomUUID(),
   title: "Workflow verification",
   messages: [],
   contexts: {},
@@ -32,14 +34,23 @@ const room = {
 };
 const access = new Access(dir);
 const tokens = [];
-for (const name of ["Alpha QA", "Beta QA"]) {
+for (const [index, name] of [
+  "Alpha QA",
+  "Beta QA",
+  ...(sessionFixture
+    ? ["Waiting QA", "Ready QA", "Queued QA", "Working QA"]
+    : []),
+].entries()) {
   const device = access.request(name, origin, "fixture");
   access.decide(
     new URL(device.verification_uri).searchParams.get("request"),
-    null,
+    index > 1 ? room : null,
     true,
   );
-  tokens.push({ name, credential: access.poll(device.device_code) });
+  tokens.push({
+    name,
+    credential: access.poll(device.device_code, { rooms: [room] }),
+  });
 }
 fs.writeFileSync(
   path.join(dir, "workspace.json"),
@@ -135,6 +146,21 @@ for (const [index, { name, credential }] of tokens.entries()) {
   const controller = new AbortController();
   controllers.push(controller);
   const call = async (data) => {
+    if (sessionFixture && index > 1 && data.action === "next_dispatch") {
+      data = {
+        ...data,
+        roomId: room.id,
+        available: false,
+        receiver: {
+          kind: "session",
+          harness: index === 3 ? "claude-code" : "codex",
+          sessionId: `mock-existing-${index}`,
+          roomId: room.id,
+          state: sessionStates[index - 2],
+          lastReceiptAt: index === 2 ? null : new Date().toISOString(),
+        },
+      };
+    }
     const response = await fetch(origin + "/a2a/jsonrpc", {
       method: "POST",
       signal: controller.signal,

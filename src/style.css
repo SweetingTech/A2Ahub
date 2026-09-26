@@ -1576,6 +1576,82 @@ header > div:first-of-type {
   gap: 24px;
   background: #f8fafb;
 }
+.conversation-setup {
+  margin-bottom: 24px;
+  padding: 22px;
+  border: 1px solid #dfe5ed;
+  border-radius: 12px;
+  background: #fff;
+}
+.conversation-setup h3 {
+  margin: 0 0 8px;
+  color: #263449;
+  font-size: 17px;
+}
+.conversation-setup-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.conversation-setup-fields label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #39495d;
+  font-size: 12px;
+  font-weight: 550;
+}
+.conversation-setup-fields input,
+.conversation-setup-fields select,
+.conversation-setup textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #b8c3d0;
+  border-radius: 8px;
+  padding: 10px;
+  background: white;
+  color: #263449;
+  font: inherit;
+}
+.conversation-setup .hub-origin-field {
+  grid-column: 1 / -1;
+}
+.conversation-setup .setup-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #637086;
+}
+.conversation-setup .setup-room {
+  overflow-wrap: anywhere;
+}
+.conversation-setup .primary {
+  width: auto;
+  margin: 4px 0 8px;
+}
+.conversation-setup details {
+  margin: 10px 0;
+  font-size: 12px;
+}
+.conversation-setup summary {
+  cursor: pointer;
+  color: #536077;
+  padding: 6px 0;
+}
+.conversation-setup textarea {
+  margin-top: 10px;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 140px;
+}
+@media (max-width: 700px) {
+  .conversation-setup {
+    padding: 17px;
+  }
+  .conversation-setup-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .settings-card {
   background: white;
   padding: 28px;

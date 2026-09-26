@@ -95,6 +95,7 @@ function participants() {
         name: a.name,
         kind: "inbound",
         status: broker.status(a.id),
+        receiver: broker.receiver(a.id),
         expiresAt: a.expiresAt,
       })),
   ];

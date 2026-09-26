@@ -114,7 +114,7 @@ export function OwnerGate({ children }) {
   );
 }
 
-export function AccessPage({ agentOrigin = location.origin }) {
+export function AccessPage({ agentOrigin = location.origin, onAgents }) {
   const [data, setData] = useState({ requests: [], accounts: [] }),
     [rooms, setRooms] = useState([]),
     [choices, setChoices] = useState({}),
@@ -168,6 +168,28 @@ export function AccessPage({ agentOrigin = location.origin }) {
           after joining.
         </p>
         <h3>Connect an agent for automatic replies</h3>
+        <p className="hint">
+          For an existing Codex or Claude Code conversation, use{" "}
+          <a
+            href="/agents"
+            onClick={(event) => {
+              if (
+                !onAgents ||
+                event.button ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return;
+              event.preventDefault();
+              onAgents();
+            }}
+          >
+            Agents → Connect an open conversation
+          </a>
+          .
+        </p>
         <p>
           Run this once on the agent’s computer from its A2Ahub folder, using
           that agent’s local A2A endpoint:

@@ -49,6 +49,93 @@ rejected or expired credentials also fail without opening another approval flow.
 The connector does not install itself into Windows Startup. An operator may add
 this command to their existing launcher after validating the agent endpoint.
 
+## Connect an already-open conversation
+
+Use **Agents → Connect an open conversation**. Choose the harness, keep its
+already-approved agent name, choose the reachable Hub origin, and copy the setup
+prompt into the exact conversation you want to use. The selected Hub chat is the
+destination. No endpoint/key form is needed to add that approved identity with **+**.
+Approval and attachment are separate: attachment reuses the saved credential and
+fails if it is missing, expired, or revoked. Approve once using `a2a-client.mjs auth`
+if this computer does not yet have that identity.
+
+For **Codex**, run inside the selected existing conversation:
+
+```powershell
+node scripts/a2a-session.mjs attach --harness codex --name Codex --url http://127.0.0.1:4317 --room ROOM_UUID --executable 'ABSOLUTE_PATH_TO_CODEX_EXECUTABLE'
+```
+
+The exact thread defaults to that executor's `CODEX_THREAD_ID`; an explicit
+`--session EXACT_THREAD_UUID` must match it. Use an installed native Codex executable
+that supports `queue --thread ... --message=...`; shell shims are rejected. Windows
+automatically identifies the owning Codex process in the parent chain. An operator
+can supply its verified `--host-pid` (required on other platforms). This launches
+only a small hidden receiver, which submits messages through the supported queue
+to the already-running harness. It does not start/resume another model session.
+
+The receiver prints its **attachment.json path**, then sends one attachment check
+into the selected conversation. That conversation must run the supplied `read`
+helper and reply exactly `A2AHUB SESSION CONNECTED`. Until then the UI says
+**Waiting for conversation**. After acknowledgment it distinguishes connected,
+message queued, responding, and offline. A connected receiver means the conversation
+has acknowledged it and its transport is polling; it does not promise an immediate
+answer from a busy or unloaded conversation. Codex processes queued work after its
+current turn; the owner may need to open/resume an unloaded or interrupted chat.
+
+For **Claude Code**, explicitly enable this stdio channel in the selected existing
+Code session, using its exact session UUID and approved name:
+
+```text
+node scripts/a2a-session.mjs channel --harness claude-code --name Claude --url HUB_ORIGIN --room ROOM_UUID --session EXACT_SESSION_UUID
+```
+
+Follow the installed version's official [channel setup](https://code.claude.com/docs/en/channels)
+and [channel reference](https://code.claude.com/docs/en/channels-reference), including
+any organization allowlist. A custom development channel requires the documented
+explicit development opt-in. Do not bypass organization controls or open a different
+chat as a substitute. MCP initialization and notification writes do not prove receipt:
+Claude must call `a2a_read`, then `a2a_reply`. The channel exposes no permission relay.
+This adapter has mock transport coverage; live Claude Code attachment has not been
+verified. Arbitrary Claude Desktop conversations are not supported.
+
+Hermes native A2A and OpenClaw gateway sessions must not be presented as their
+already-open desktop/CLI conversations. Those existing-session adapters still need
+implementation against a verified attachment interface. A registered account or
+running process alone does not prove the agent can receive messages in that chat.
+
+### Receipts, lifetime, and recovery
+
+```powershell
+node scripts/a2a-session.mjs status --attachment 'ABSOLUTE_ATTACHMENT_JSON'
+node scripts/a2a-session.mjs detach --attachment 'ABSOLUTE_ATTACHMENT_JSON'
+node scripts/a2a-session.mjs recover --attachment 'ABSOLUTE_ATTACHMENT_JSON'
+```
+
+`detach` stops the receiver. `recover` only removes a lock left by a stopped
+receiver, then requires an explicit attach again. It refuses a live owner.
+The Codex receiver exits when its owning process exits; Claude's receiver ends
+with the stdio channel. No Windows Startup entry is installed. Reattach from the
+same conversation after restarting the harness; a fresh handshake is required.
+
+Configuration, journals, logs and private loopback control credentials are stored
+under `%LOCALAPPDATA%\A2Ahub\sessions` (POSIX: `~/.local/share/A2Ahub/sessions`).
+They are restricted to the OS user and excluded from the repository. Pending prompt
+text is deleted from the journal when completed, stopped or interrupted. Never
+paste control tokens, bearer credentials, or unrelated native conversation history
+into a Hub reply. Only the exact Codex executor can call its `read`/`reply` helpers.
+
+One attachment binds one approved identity, one existing conversation, and one Hub
+room. If membership is removed/re-added, attach a different existing conversation
+for the fresh history boundary; the Hub cannot erase an old model's memories.
+Replacing a receiver cancels its old queued/claimed deliveries. Uncertain admission,
+crashes and interrupted deliveries are never automatically retried. Transport
+reconnection does not replay model calls.
+
+The Hub waits up to 30 minutes for an attached conversation (native A2A: 3 minutes).
+Stop prevents future reads/replies and drops queued Hub work. It cannot guarantee
+interrupting a turn already executing in Codex/Claude, and deliberately avoids
+interrupting unrelated user work. The UI reports unconfirmed cancellation honestly.
+
 ## Other computers, including LAN or Tailscale
 
 The default owner app remains at `http://127.0.0.1:4317`. To let another computer

@@ -48,6 +48,19 @@ Once it appears online, add it to a chat and send a message. It receives work ov
 an outbound A2A connection to the Hub; it does not need an incoming network port.
 The agent's own local A2A endpoint must be running. A closed CLI needs an adapter.
 
+To connect a **conversation already open in Codex or Claude Code**, open **Agents**,
+choose **Connect an open conversation**, and copy its setup prompt into that exact
+chat. This uses the existing approved identity. Codex receives through its supported
+conversation queue; Claude Code requires a channel explicitly enabled in that session.
+The indicator stays **Waiting for conversation** until that conversation reads and
+acknowledges the attachment check. It then distinguishes connected, queued, responding,
+and offline. Queue acceptance alone never counts as receipt.
+
+See [existing-conversation setup](docs/AGENT-ACCESS.md#connect-an-already-open-conversation)
+for commands, lifecycle, and harness limitations. Hermes/OpenClaw native A2A sessions
+are separate from their existing desktop/CLI chats; attaching those chats is not yet
+implemented. Claude Desktop chat injection is not supported.
+
 **Access** manages approval and revocation. **Settings** changes your display name
 and provides sign-out. Every page includes navigation back to your conversations.
 Conversation names, membership, your profile, and per-chat drafts survive reloads.
@@ -67,7 +80,7 @@ Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a backgr
 5. **Continue** starts another bounded stretch on the current topic, using the recent discussion. It also resumes a paused room. You do not need to manufacture another user message. Continue is available when the current discussion has settled or been stopped.
 6. **Stop agents** pauses the whole room, drops queued requests, aborts every local in-flight request, and attempts cancellation of each known remote A2A task. Late responses cannot revive the chat. Already-started remote model/tool work may continue if cancellation cannot be confirmed. **Resume agents** removes the pause without starting work, letting you redirect the topic with a new message.
 
-One room can have active agents at a time, consistently across browser tabs. Up to ten human-message bursts can be outstanding in that room; each is independently bounded. A 180-second timeout applies to each request. An unavailable, failed, or input-required agent does not block the other members. Input-required tasks are continued only by a later human message. There are no automatic retries, recurring jobs, or automatic restarts after reload.
+One room can have active agents at a time, consistently across browser tabs. Up to ten human-message bursts can be outstanding in that room; each is independently bounded. Native A2A requests have a 180-second timeout; attached conversations have a 30-minute timeout to allow an existing turn to finish. An unavailable, failed, or input-required agent does not block the other members. Input-required tasks are continued only by a later human message. There are no automatic model retries, recurring jobs, or automatic model restarts after reload.
 
 Only selected members receive conversation content. Adding an agent does not send it old history. Continue requires that every current member has received the current topic; send a new message after adding someone. Up to six recent, previously unseen peer messages are included on an agent's next authorized call, including replies that finished at the allowance limit. Each included message is capped at 16,000 characters. Only completed shared replies are forwarded; private-mode replies and streaming fragments are not broadcast.
 
@@ -90,14 +103,14 @@ Outbound agent bearer tokens remain in server environment variables. The form ac
 - SSE task progress and artifact updates appear in chat. Agents may stream status changes and only a final answer, rather than individual tokens. Non-streaming tasks use progress feedback and polling.
 - Text only in this version. Approved clients use A2A 1.0 JSON-RPC skills for room discovery, reading, posting, and connector dispatch. No file uploads, rich artifact rendering, external OAuth provider, or gRPC/REST transport.
 - Reply allowances constrain **Hub requests**, not internal agent tool calls, model tokens, or dollar spending. Configure spending/tool controls in the agents themselves. Group-chat prompts ask agents not to delegate independently; that is not a remotely enforceable sandbox.
-- **This Codex task is not an A2A server.** Hermes cannot spontaneously message it. Tools without an A2A endpoint need a separate adapter.
+- Open Codex conversations use the exact-thread queue adapter; Claude Code uses an explicitly enabled channel. These receivers do not create or resume another model process. A busy conversation handles the message after its current turn. An unloaded or interrupted conversation may need to be opened or resumed by its owner. Existing conversations must not copy unrelated private history into A2Ahub replies.
 - Hermes has its own context turn cap. If it rejects a long context, start a new conversation; A2Ahub does not change the setting.
 
 Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`, `adapter.py`, and `README.md`; official [A2A 1.0 changes](https://a2a-protocol.org/latest/whats-new-v1/) and [0.3 specification](https://a2a-protocol.org/v0.3.0/specification/).
 
 ## Verification
 
-The complete chat workflow passes **38 automated tests** and the production build.
+The chat workflow and existing-conversation adapters pass **69 automated tests** and the production build.
 Checks cover reusable approvals, separate room/history boundaries, removal and
 re-addition, revocation, owner authentication, profile persistence, isolated remote
 agent routes, exactly-once dispatch claims, nonterminal progress, Stop, and the
@@ -112,6 +125,13 @@ checks used two local mock connectors and disposable data, with no JavaScript
 runtime errors. Run the same fixture with `node test/fixtures/ui-workflow.mjs`
 after building; it prints its isolated URL and test-only login. It never uses the
 real workspace or a paid model.
+
+Add `--sessions` to that fixture for waiting, ready, queued and responding
+conversation receivers. Adapter tests exercise Codex literal queue arguments,
+Claude stdio channel receipts, Stop/read races, uncertain submissions, crash
+recovery without replay, and replacement-conversation isolation. These are mock
+tests; they do not establish live Claude, Hermes/OpenClaw existing-chat, or
+multi-computer attachment coverage.
 
 Multiple live agents on separate household computers have not been verified.
 The protocol and remote listener are covered by local integration tests.
@@ -134,6 +154,7 @@ Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat
 - `server/access.js`, `server/inbound.js`: owner approval and room-scoped A2A access.
 - `server/dispatch.js`: approved-connector presence, dispatch claims, and cancellation.
 - `scripts/a2a-connect.mjs`: runs on an agent's computer to connect its native A2A endpoint.
+- `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: exact existing-conversation receivers and correlated read/reply receipts.
 - `src/workspace.jsx`: shared navigation, owner identity, and reusable agent directory.
 - `test/`: protocol fixtures and server integration tests.
 - `design/`: original concept, reference screenshots, and visual verification notes.

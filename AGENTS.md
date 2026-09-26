@@ -17,6 +17,7 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access.
 - `scripts/a2a-client.mjs`: private device-authorization client and A2A read/post helper.
 - `scripts/a2a-connect.mjs`, `server/dispatch.js`: outbound agent connector and single-claim dispatch broker.
+- `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: existing Codex conversation queue and opted-in Claude Code channel; private receipt journal and loopback control helper.
 - `test/workflow.test.js`, `test/dispatch.test.js`: reusable-agent, history, remote-listener, and dispatch regressions.
 
 ## Behavioral constraints
@@ -36,6 +37,10 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - Manual inbound posts may use only an existing human-started remaining allowance and cannot wake their author, resume a paused room, or create a new burst. Connector polling does not itself authorize model work.
 - Dispatch claims are single-use and account/room/connector/lease scoped. Revalidate membership and revocation after long polls and before reports. Never redeliver uncertain claimed work after a transport error or restart.
 - Tools without an A2A endpoint need an adapter. A Codex task is not itself an A2A server.
+- Existing-conversation receivers must target an explicit exact session and room. Never replace this with a dedicated headless worker, new/resumed model executor, transcript scraping, or private runtime IPC. Queue admission and MCP initialization are not receipt: show connected only after the target reads and acknowledges a correlated handshake. Preserve the owning harness permissions.
+- Pin dispatch to its original connector. A replacement conversation must never consume prior queued/claimed work. Persist admission before enqueue, seal uncertain/interrupted deliveries, revalidate Stop and membership before reads/replies, and never automatically replay model work. Attached sessions may wait up to 30 minutes; native calls retain 180 seconds.
+- Session receivers cannot guarantee interrupting an already-running Codex/Claude turn. Report cancellation unconfirmed; do not interrupt unrelated human work. Bind one existing conversation to one room and reject a reset membership context because existing model history cannot be erased by the Hub.
+- Keep session journals/control tokens under the private OS-user data directory. The Codex receiver follows its owning process lifetime; reattachment requires another handshake. Do not install an independent always-on model worker or change the Windows Startup launcher implicitly.
 
 ## Credentials and persistence
 
@@ -62,6 +67,8 @@ Run tests relevant to changes and a production build before handoff. Add meaning
 For group-chat UI verification, use delayed local mock agents and a disposable `A2AHUB_DATA_DIR` on an unused loopback port. Exercise concurrent replies, human interjections, the six-request cap, Continue, Stop from another tab, cleared queues, and Resume without new requests. Check desktop and narrow mobile layouts, membership after reload, and the mobile connection inspector. Keep screenshots and temporary browser scripts outside tracked source.
 
 `node test/fixtures/ui-workflow.mjs` starts a disposable production UI with two approved mock connectors. Use it to verify plus-picker reuse, desktop drag, mobile Add, navigation, rename, profile, drafts, login/logout, and errors. Use the user's existing browser when requested. Close fixture processes after verification. Distinguish mock, live single-agent, and actual multi-computer coverage in reports.
+
+Add `--sessions` for receipt-state UI checks. Existing-session tests cover queue admission versus target receipt, Stop/read races, journal recovery, context boundaries, and connector replacement. A live self-target Codex queue cannot be consumed until the current turn yields; never mark that round trip passed from enqueue output alone. Claude channel mock tests do not establish Claude Desktop support or a live opted-in Code session.
 
 Preserve keyboard access to the connection dialog after failed discovery: disabling the submit button can move focus to the document body. Escape must still dismiss the dialog, Tab and Shift+Tab must recover focus inside it, and closing must restore focus to the opener. Record expected failed-request console entries separately from unexpected runtime errors.
 

@@ -22,6 +22,7 @@ import {
   AgentDirectory,
   AgentPicker,
   beginAgentPointerDrag,
+  connectionStatus,
   Dialog,
   Navigation,
   pages,
@@ -203,6 +204,21 @@ function App() {
     otherRoomActive = active && active.roomId !== room?.id,
     talkingIds = [...new Set(roomRuns.flatMap((r) => r.activeAgentIds))],
     queuedIds = [...new Set(roomRuns.flatMap((r) => r.queuedAgentIds))];
+  const waitingConversations = members.filter(
+    (a) =>
+      a.receiver?.kind === "session" && connectionStatus(a) === "unchecked",
+  );
+  const offlineConversations = members.filter(
+    (a) =>
+      a.receiver?.kind === "session" &&
+      !["connected", "unchecked"].includes(connectionStatus(a)),
+  );
+  const offlineConnectors = members.filter(
+    (a) =>
+      a.kind === "inbound" &&
+      a.receiver?.kind !== "session" &&
+      a.status !== "connected",
+  );
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
   }, [room?.messages.length, room?.messages.at(-1)?.text]);
@@ -338,7 +354,7 @@ function App() {
                 setMobile(false);
               }}
             >
-              <i className={`dot ${a.status}`} />
+              <i className={`dot ${connectionStatus(a)}`} />
               <span>{a.name}</span>
               <ChevronRight size={16} />
             </button>
@@ -470,6 +486,11 @@ function App() {
             participants={participants}
             selected={selected}
             roomTitle={room?.title}
+            roomId={room?.id}
+            agentConnectionUrl={
+              data.agentConnectionUrl || data.agentOrigin || location.origin
+            }
+            setupAgentName={agent?.kind === "inbound" ? agent.name : undefined}
             busy={busy || !online}
             locked={roomActive}
             onChoose={choose}
@@ -485,7 +506,12 @@ function App() {
             onConversation={() => navigate("/")}
           />
         )}
-        {path === "/access" && <AccessPage agentOrigin={data.agentOrigin} />}
+        {path === "/access" && (
+          <AccessPage
+            agentOrigin={data.agentOrigin}
+            onAgents={() => navigate("/agents")}
+          />
+        )}
         {path === "/settings" && (
           <SettingsPage
             profile={data.profile}
@@ -592,17 +618,29 @@ function App() {
               )}
             </section>
             <div className="compose-wrap">
-              {members.some(
-                (a) => a.kind === "inbound" && a.status !== "connected",
-              ) && (
+              {waitingConversations.length > 0 && (
                 <p className="connector-hint" role="status">
-                  {members
-                    .filter(
-                      (a) => a.kind === "inbound" && a.status !== "connected",
-                    )
-                    .map((a) => a.name)
-                    .join(", ")}{" "}
-                  can read and post, but their connector is offline.{" "}
+                  Waiting for{" "}
+                  {waitingConversations.map((a) => a.name).join(", ")} to
+                  confirm their open conversation.
+                </p>
+              )}
+              {offlineConversations.length > 0 && (
+                <p className="connector-hint" role="status">
+                  {offlineConversations.map((a) => a.name).join(", ")} have an
+                  offline conversation. Open it and connect again.{" "}
+                  <button
+                    className="text-button"
+                    onClick={() => navigate("/agents")}
+                  >
+                    Conversation setup
+                  </button>
+                </p>
+              )}
+              {offlineConnectors.length > 0 && (
+                <p className="connector-hint" role="status">
+                  {offlineConnectors.map((a) => a.name).join(", ")} can read and
+                  post, but their connector is offline.{" "}
                   <button
                     className="text-button"
                     onClick={() => navigate("/access")}
@@ -696,7 +734,7 @@ function App() {
                       disabled={busy || roomActive || !online}
                       onClick={() => choose(a.id, false)}
                     >
-                      <i className={`dot ${a.status}`} />
+                      <i className={`dot ${connectionStatus(a)}`} />
                       {a.name}
                       <X size={13} />
                     </button>
@@ -829,7 +867,7 @@ function App() {
           {agent ? (
             <>
               <div className="connection-name">
-                <i className={`dot ${agent.status}`} />
+                <i className={`dot ${connectionStatus(agent)}`} />
                 <strong>{agent.name}</strong>
               </div>
               <dl>
@@ -838,7 +876,26 @@ function App() {
                   {agent.kind === "inbound" ? "Approved A2A agent" : agent.url}
                 </dd>
                 <dt>Status</dt>
-                <dd className={agent.status}>{statusText(agent)}</dd>
+                <dd className={connectionStatus(agent)}>{statusText(agent)}</dd>
+                {agent.receiver?.kind === "session" && (
+                  <>
+                    <dt>Conversation ID</dt>
+                    <dd className="endpoint">{agent.receiver.sessionId}</dd>
+                    <dt>Hub conversation</dt>
+                    <dd>
+                      {data.rooms.find((r) => r.id === agent.receiver.roomId)
+                        ?.title || "Unavailable conversation"}
+                    </dd>
+                    <dt>Last receipt</dt>
+                    <dd>
+                      {agent.receiver.lastReceiptAt
+                        ? new Date(
+                            agent.receiver.lastReceiptAt,
+                          ).toLocaleString()
+                        : "Waiting for confirmation"}
+                    </dd>
+                  </>
+                )}
                 <dt>A2A</dt>
                 <dd>
                   {agent.kind === "inbound"
@@ -848,7 +905,9 @@ function App() {
                 <dt>Replies</dt>
                 <dd>
                   {agent.kind === "inbound"
-                    ? "Approved connector"
+                    ? agent.receiver?.kind === "session"
+                      ? "Attached conversation"
+                      : "Approved connector"
                     : agent.streaming
                       ? "Streaming"
                       : "Request / response"}
@@ -857,12 +916,23 @@ function App() {
               {agent.error && <p className="warning">{agent.error}</p>}
               <div className="connection-actions">
                 {agent.kind === "inbound" ? (
-                  <button
-                    className="text-button"
-                    onClick={() => navigate("/access")}
-                  >
-                    Manage access and setup
-                  </button>
+                  <>
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setInspectOpen(false);
+                        navigate("/agents");
+                      }}
+                    >
+                      Connect an open conversation
+                    </button>
+                    <button
+                      className="text-button"
+                      onClick={() => navigate("/access")}
+                    >
+                      Manage access
+                    </button>
+                  </>
                 ) : (
                   <>
                     <button

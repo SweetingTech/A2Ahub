@@ -43,8 +43,14 @@ export class DispatchBroker {
     return !peer
       ? "approved"
       : this.now() - peer.seen < this.presenceMs
-        ? "connected"
+        ? peer.receiver?.state === "awaiting-confirmation"
+          ? "approved"
+          : "connected"
         : "offline";
+  }
+
+  receiver(accountId) {
+    return this.peers.get(accountId)?.receiver || null;
   }
 
   lastSeen(accountId) {
@@ -108,6 +114,19 @@ export class DispatchBroker {
       return Promise.reject(
         new Error("Agent is not authorized for this conversation."),
       );
+    const receiver = this.receiver(accountId);
+    if (receiver && receiver.roomId !== roomId)
+      return Promise.reject(
+        new Error(
+          "This agent's open conversation is attached to another Hub chat. Attach the intended conversation to this chat first.",
+        ),
+      );
+    if (receiver?.state === "awaiting-confirmation")
+      return Promise.reject(
+        new Error(
+          "Waiting for the selected conversation to confirm its connection. Queued does not mean received.",
+        ),
+      );
     if (this.status(accountId) !== "connected")
       return Promise.reject(
         new Error(
@@ -129,6 +148,7 @@ export class DispatchBroker {
       const job = {
         dispatchId,
         accountId,
+        targetConnectorId: this.peers.get(accountId).connectorId,
         roomId,
         prompt,
         context: { ...context, contextId },
@@ -180,16 +200,73 @@ export class DispatchBroker {
     if (
       prior &&
       prior.connectorId !== connectorId &&
-      this.status(accountId) === "connected"
+      this.now() - prior.seen < this.presenceMs
     )
       throw new Error("Another connector already owns this agent connection.");
-    const wasConnected = this.status(accountId) === "connected";
+    if (prior && prior.connectorId !== connectorId) {
+      for (const job of this.jobs.values()) {
+        if (job.accountId === accountId)
+          this.stop(
+            job,
+            "The original conversation receiver disconnected. Send a new message to the newly attached conversation; old work was not forwarded.",
+          );
+      }
+    }
+    let receiver = null;
+    if (command.receiver !== undefined) {
+      const input = command.receiver;
+      if (
+        !input ||
+        input.kind !== "session" ||
+        !["codex", "claude-code"].includes(input.harness) ||
+        !id(input.sessionId) ||
+        !id(input.roomId) ||
+        command.roomId !== input.roomId ||
+        !["awaiting-confirmation", "ready", "queued", "working"].includes(
+          input.state,
+        )
+      )
+        throw new Error("Invalid existing-conversation receiver binding.");
+      receiver = {
+        kind: "session",
+        harness: input.harness,
+        sessionId: input.sessionId,
+        roomId: input.roomId,
+        state: input.state,
+        lastReceiptAt:
+          typeof input.lastReceiptAt === "string" &&
+          Number.isFinite(Date.parse(input.lastReceiptAt))
+            ? input.lastReceiptAt
+            : null,
+      };
+      if (receiver.state !== "awaiting-confirmation" && !receiver.lastReceiptAt)
+        throw new Error(
+          "A conversation receipt is required before receiving work.",
+        );
+    }
+    if (
+      prior?.connectorId === connectorId &&
+      prior.receiver &&
+      (!receiver ||
+        ["sessionId", "roomId", "harness"].some(
+          (key) => prior.receiver[key] !== receiver[key],
+        ))
+    )
+      throw new Error(
+        "A live connector cannot switch its conversation binding.",
+      );
+    const previousStatus = this.status(accountId);
     this.peers.set(accountId, {
       connectorId,
       seen: this.now(),
       offlineReported: false,
+      receiver,
     });
-    if (!wasConnected) this.onChange();
+    if (
+      previousStatus !== this.status(accountId) ||
+      JSON.stringify(prior?.receiver) !== JSON.stringify(receiver)
+    )
+      this.onChange();
     const take = () => {
       this.sweep();
       const owned = [...this.jobs.values()].filter(
@@ -208,12 +285,14 @@ export class DispatchBroker {
       // was lost. The owner can inspect the uncertain outcome and send anew.
       if (
         command.available === false ||
+        receiver?.state === "awaiting-confirmation" ||
         owned.some((job) => job.state === "claimed")
       )
         return null;
       const job = owned.find(
         (job) =>
           job.state === "queued" &&
+          job.targetConnectorId === connectorId &&
           (!command.roomId || command.roomId === job.roomId) &&
           this.isAuthorized(accountId, job.roomId),
       );
