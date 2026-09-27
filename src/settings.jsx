@@ -315,9 +315,7 @@ function AppearancePanel({ value, onChange }) {
           </div>
           <button
             className="text-button"
-            onClick={() =>
-              onChange({ ...DEFAULT_APPEARANCE, layout: value.layout })
-            }
+            onClick={() => onChange({ ...DEFAULT_APPEARANCE })}
           >
             Reset to defaults
           </button>
