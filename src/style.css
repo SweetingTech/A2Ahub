@@ -3511,11 +3511,17 @@ summary {
 [data-layout="1920"] .app {
   max-width: 1920px;
 }
-/* The composer lines up with the message column instead of stretching. */
+/* The composer lines up with the message column instead of stretching:
+   same cap and same side padding as .messages (both border-box). */
 .compose-wrap {
   width: 100%;
-  max-width: 66rem;
+  max-width: 62rem;
   margin-inline: auto;
+}
+@media (min-width: 701px) {
+  .compose-wrap {
+    padding-inline: 2rem;
+  }
 }
 
 /* Ultrawide (e.g. 3440×1440, 5120×1440): conversations and agents sit side
@@ -3570,7 +3576,7 @@ summary {
     max-width: 90rem;
   }
   :root:not([data-layout="1920"]) .compose-wrap {
-    max-width: 94rem;
+    max-width: 90rem;
   }
   :root:not([data-layout="1920"]) .message-body {
     max-width: min(56rem, 78%);
@@ -3601,7 +3607,7 @@ summary {
     max-width: 110rem;
   }
   :root[data-layout="full"] .compose-wrap {
-    max-width: 114rem;
+    max-width: 110rem;
   }
   :root[data-layout="full"] .message-body {
     max-width: min(64rem, 72%);
