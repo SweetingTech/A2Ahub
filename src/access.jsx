@@ -299,7 +299,12 @@ export function AccessPage({ agentOrigin = location.origin, onAgents }) {
                     () =>
                       request(`/api/access/${r.id}/decision`, {
                         approved: true,
-                        ...(choices[r.id] ? { roomId: choices[r.id] } : {}),
+                        // Ignore a choice whose room was archived meanwhile.
+                        ...(rooms.some(
+                          (room) => room.id === choices[r.id] && !room.archived,
+                        )
+                          ? { roomId: choices[r.id] }
+                          : {}),
                       }),
                     `${r.name} approved and added to your directory. The agent can now collect its credential.`,
                   )

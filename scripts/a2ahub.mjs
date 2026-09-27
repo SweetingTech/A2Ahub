@@ -45,7 +45,8 @@ Data
   a2ahub backup                      Write a workspace backup (no credentials)
   a2ahub tokens                      List manager tokens
 
-Options: --json for machine-readable output, --url to choose the Hub.
+Options: --json for machine-readable output (with --watch: one JSON object
+per line), --url to choose a loopback Hub address.
 Put -- before text that starts with "--": a2ahub say ROOM -- "--compare plans"
 Environment: A2AHUB_URL, A2AHUB_MANAGER_TOKEN, A2AHUB_CLI_HOME.
 Ctrl+C while watching only detaches; agents keep running until you stop them.`;
@@ -101,6 +102,13 @@ function hubOrigin(config = readConfig()) {
     config.url ||
     "http://127.0.0.1:4317";
   const url = new URL(raw);
+  // The owner API is loopback-only; never send the owner password or a
+  // manager token anywhere else. Reach another computer through a tunnel.
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))
+    fail(
+      `Refusing ${url.origin}: the owner API is loopback-only. ` +
+        "For another computer, tunnel it: ssh -L 4317:127.0.0.1:4317 hub-pc",
+    );
   if (
     !["http:", "https:"].includes(url.protocol) ||
     url.username ||
@@ -361,12 +369,16 @@ function printMessage(m) {
 const settled = (m) =>
   m.role === "user" || !["working", "submitted"].includes(m.state);
 
+// With --json, watching prints one JSON object per line (NDJSON).
+const emit = (event, human) =>
+  json ? console.log(JSON.stringify(event)) : human();
+
 async function watch(room, runId, from) {
   const origin = hubOrigin();
   const controller = new AbortController();
   process.once("SIGINT", () => {
     controller.abort();
-    console.log(
+    console.error(
       `\nDetached. Agents keep running — stop them with: a2ahub stop "${room.title}"`,
     );
     process.exit(130);
@@ -414,10 +426,16 @@ async function watch(room, runId, from) {
         if (printed.has(m.id)) continue;
         if (settled(m)) {
           printed.add(m.id);
-          printMessage(m);
+          const { id, name, role, state, text, createdAt } = m;
+          emit(
+            { type: "message", id, name, role, state, text, createdAt },
+            () => printMessage(m),
+          );
         } else if (!working.has(m.id)) {
           working.add(m.id);
-          console.log(`\n… ${m.name} is working`);
+          emit({ type: "working", id: m.id, name: m.name }, () =>
+            console.log(`\n… ${m.name} is working`),
+          );
         }
       }
       const runs = state.runs.filter((r) => r.roomId === room.id);
@@ -426,7 +444,10 @@ async function watch(room, runId, from) {
         const status = `${run.state} · ${run.turn}/${run.maxTurns} requests`;
         if (status !== lastStatus) {
           lastStatus = status;
-          console.log(`\n— ${status}`);
+          const { id, state, turn, maxTurns } = run;
+          emit({ type: "status", runId: id, state, turn, maxTurns }, () =>
+            console.log(`\n— ${status}`),
+          );
         }
       }
       if (runId && run && !["running", "stopping"].includes(run.state)) {
@@ -555,18 +576,23 @@ async function main() {
       const text = rest.join(" ");
       if (!text) fail('Usage: a2ahub say ROOM "message"');
       const run = await post(`/rooms/${room.id}/messages`, { text });
-      if (!json)
-        console.log(
-          `→ Sent to ${room.title}. Burst ${run.id.slice(0, 8)} started.`,
+      if (json && flags.watch)
+        emit({ type: "started", ...run, roomId: room.id }, () => {});
+      else
+        print(run, () =>
+          console.log(
+            `→ Sent to ${room.title}. Burst ${run.id.slice(0, 8)} started.`,
+          ),
         );
-      else print(run, () => {});
       if (flags.watch) await watch(room, run.id, run.from);
       return;
     }
     case "continue": {
       const room = await findRoom(sub);
       const run = await post(`/rooms/${room.id}/continue`);
-      print(run, () => console.log(`→ Continuing ${room.title}.`));
+      if (json && flags.watch)
+        emit({ type: "started", ...run, roomId: room.id }, () => {});
+      else print(run, () => console.log(`→ Continuing ${room.title}.`));
       if (flags.watch) await watch(room, run.id, run.from);
       return;
     }

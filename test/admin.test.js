@@ -411,6 +411,51 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       await request("/api/v1/access", undefined, { token: fullToken })
     ).data.accounts.find((a) => a.name === "Racer");
     assert.ok(!Object.hasOwn(racerAccount.bindings, raceRoom.id));
+
+    // An archived room delivers no history to a member agent.
+    const readRoom = async (roomId) => {
+      const response = await fetch(origin + "/a2a/jsonrpc", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "A2A-Version": "1.0",
+          Authorization: `Bearer ${collected.data.access_token}`,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "read",
+          method: "SendMessage",
+          params: {
+            message: {
+              messageId: `read-${Date.now()}`,
+              role: "ROLE_USER",
+              contextId: roomId,
+              parts: [{ data: { action: "read_messages", roomId } }],
+            },
+          },
+        }),
+      });
+      return JSON.stringify(await response.json());
+    };
+    const memberRoom = (
+      await request("/api/v1/rooms", {}, { token: fullToken })
+    ).data;
+    await request(
+      `/api/v1/rooms/${memberRoom.id}`,
+      { agentIds: [racerAccount.id] },
+      { method: "PATCH", token: fullToken },
+    );
+    assert.match(await readRoom(memberRoom.id), /next_cursor/);
+    await request(
+      `/api/v1/rooms/${memberRoom.id}/archive`,
+      {},
+      {
+        token: fullToken,
+      },
+    );
+    const archivedRead = await readRoom(memberRoom.id);
+    assert.match(archivedRead, /archived/);
+    assert.doesNotMatch(archivedRead, /next_cursor/);
     await request("/auth/device", { name: "Late" });
     const late = (
       await request("/api/v1/access", undefined, { token: fullToken })
@@ -487,6 +532,13 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       cli(["status"], { A2AHUB_MANAGER_TOKEN: readToken }),
       /lacks the admin scope/,
     );
+    // Credentials are only ever sent to loopback Hub addresses.
+    await assert.rejects(
+      cli(["status", "--url", "https://example.invalid"], {
+        A2AHUB_MANAGER_TOKEN: fullToken,
+      }),
+      /loopback-only/,
+    );
 
     // Bodyless CLI mutations must really change server state.
     const asOwner = { A2AHUB_MANAGER_TOKEN: fullToken };
@@ -555,6 +607,20 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       assert.match(watched.stdout, /Beta reply/);
       assert.match(watched.stdout, /completed · 2\/2 requests/);
       assert.doesNotMatch(watched.stderr, /abort/i);
+      // --json with --watch is line-delimited JSON only.
+      const events = (
+        await cli(["say", target.id, "Again", "--watch", "--json"], asOwner)
+      ).stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.equal(events[0].type, "started");
+      assert.ok(
+        events.some((e) => e.type === "message" && e.text === "Alpha reply"),
+      );
+      assert.ok(
+        events.some((e) => e.type === "status" && e.state === "completed"),
+      );
     } finally {
       alpha.close();
       beta.close();
