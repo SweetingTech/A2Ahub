@@ -129,6 +129,9 @@ export function mountInbound(
           // protocol context as a second permission boundary.
           contextId = room.id;
           if (command.action === "read_messages") {
+            // Archived rooms are read-only for the owner and deliver nothing.
+            if (room.archived)
+              throw new Error("Conversation is archived by the owner.");
             const startIndex = account.bindings[room.id];
             const cursor = command.cursor ?? startIndex;
             if (

@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
 const fail = (status, message) => Object.assign(new Error(message), { status });
+export const MANAGER_SCOPES = ["read", "chat", "admin"];
 
 export function privateDirectory(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -104,6 +105,109 @@ export class Access {
     const cookie = this.sessionCookie(req);
     if (cookie) this.sessions.delete(hash(cookie));
   }
+  sessionCount() {
+    const now = this.now();
+    for (const [id, until] of this.sessions)
+      if (until <= now) this.sessions.delete(id);
+    return this.sessions.size;
+  }
+  // Keeps the caller's session (if any) and ends every other owner session.
+  revokeOtherSessions(req) {
+    const keep = this.sessionCookie(req);
+    const kept = keep && hash(keep);
+    let ended = 0;
+    for (const id of [...this.sessions.keys()])
+      if (id !== kept) {
+        this.sessions.delete(id);
+        ended++;
+      }
+    return ended;
+  }
+  changePassword(current, next, req) {
+    this.limit(`password:${req.socket.remoteAddress}`, 5, 60000);
+    if (
+      typeof current !== "string" ||
+      current.length > 256 ||
+      !timingSafeEqual(
+        scryptSync(current, this.db.owner.salt, 32),
+        Buffer.from(this.db.owner.digest, "hex"),
+      )
+    )
+      throw fail(401, "Current password is incorrect.");
+    if (typeof next !== "string" || next.length < 12 || next.length > 256)
+      throw fail(400, "New password must be 12–256 characters.");
+    const salt = secret();
+    this.db.owner = {
+      salt,
+      digest: scryptSync(next, salt, 32).toString("hex"),
+      changedAt: this.now(),
+    };
+    this.save();
+    // The generated first-run password is no longer valid; do not leave it behind.
+    fs.rmSync(this.passwordFile, { force: true });
+    this.revokeOtherSessions(req);
+  }
+  // Manager tokens let the owner's own CLI and scripts use the loopback owner
+  // API. They are hashed like agent credentials but live in a separate list,
+  // so agent A2A authentication can never accept one and vice versa.
+  createManagerToken(name, scopes) {
+    if (typeof name !== "string" || !name.trim() || name.length > 60)
+      throw fail(400, "Token name must be 1–60 characters.");
+    if (
+      !Array.isArray(scopes) ||
+      !scopes.length ||
+      scopes.some((s) => !MANAGER_SCOPES.includes(s)) ||
+      new Set(scopes).size !== scopes.length
+    )
+      throw fail(400, "Choose scopes from read, chat and admin.");
+    this.db.managerTokens ??= [];
+    if (this.db.managerTokens.filter((t) => !t.revoked).length >= 20)
+      throw fail(429, "Revoke an unused manager token first.");
+    const token = "a2m_" + secret();
+    const record = {
+      id: randomUUID(),
+      name: name.trim(),
+      scopes: MANAGER_SCOPES.filter((s) => scopes.includes(s)),
+      tokenHash: hash(token),
+      hint: token.slice(-4),
+      createdAt: this.now(),
+      lastUsedAt: null,
+      revoked: false,
+    };
+    this.db.managerTokens.push(record);
+    this.save();
+    const { tokenHash, ...visible } = record;
+    return { ...visible, token };
+  }
+  listManagerTokens() {
+    return (this.db.managerTokens || [])
+      .filter((t) => !t.revoked)
+      .map(({ tokenHash, ...t }) => t);
+  }
+  revokeManagerToken(id) {
+    const record = (this.db.managerTokens || []).find(
+      (t) => t.id === id && !t.revoked,
+    );
+    if (!record) throw fail(404, "Manager token not found.");
+    record.revoked = true;
+    this.save();
+    return record;
+  }
+  manager(req, { touch = true } = {}) {
+    const token = /^Bearer (a2m_\S+)$/.exec(
+      req.headers.authorization || "",
+    )?.[1];
+    if (!token || token.length > 256) return null;
+    const digest = hash(token);
+    const record = (this.db.managerTokens || []).find(
+      (t) => !t.revoked && t.tokenHash === digest,
+    );
+    if (record && touch && this.now() - (record.lastUsedAt || 0) > 60000) {
+      record.lastUsedAt = this.now();
+      this.save();
+    }
+    return record || null;
+  }
   request(name, origin, ip) {
     this.limit(`device:${ip}`, 30, 600000);
     if (typeof name !== "string" || !name.trim() || name.length > 80)
@@ -132,10 +236,17 @@ export class Access {
       interval: 5,
     };
   }
-  decide(id, room, approved) {
+  decide(id, room, approved, userCode) {
     const r = this.db.requests.find((r) => r.id === id);
     if (!r || r.expiresAt <= this.now() || r.state !== "pending")
       throw fail(409, "Request is expired or already handled.");
+    // Callers without a screen to compare (the CLI) must echo the code.
+    if (
+      userCode !== undefined &&
+      (typeof userCode !== "string" ||
+        userCode.replace(/[\s-]/g, "").toUpperCase() !== r.userCode)
+    )
+      throw fail(400, "Verification code does not match this request.");
     Object.assign(r, {
       state: approved ? "approved" : "denied",
       roomId: room?.id,
@@ -296,6 +407,7 @@ export class Access {
         id: r.id,
         title: r.title,
         paused: !!r.paused,
+        archived: !!r.archived,
         start_cursor: account.bindings[r.id],
       }));
   }

@@ -3,14 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "a2ahub": "scripts/a2ahub.mjs"
+  },
   "scripts": {
     "dev": "node server/index.js --dev",
     "build": "vite build",
     "start": "node server/index.js",
+    "start:headless": "node server/index.js --headless",
+    "cli": "node scripts/a2ahub.mjs",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@a2a-js/sdk": "^1.2.0",
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/atkinson-hyperlegible": "^5.3.0",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",

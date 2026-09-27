@@ -87,6 +87,55 @@ Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a backgr
 5. **Continue** starts another bounded stretch on the current topic, using the recent discussion. It also resumes a paused room. You do not need to manufacture another user message. Continue is available when the current discussion has settled or been stopped.
 6. **Stop agents** pauses the whole room, drops queued requests, aborts every local in-flight request, and attempts cancellation of each known remote A2A task. Late responses cannot revive the chat. Already-started remote model/tool work may continue if cancellation cannot be confirmed. **Resume agents** removes the pause without starting work, letting you redirect the topic with a new message.
 
+## Organize, appearance, admin and headless use
+
+**Folders and archive.** Group chats into colored folders from the sidebar (folder
+icon beside **Conversations**), drag a chat onto a folder, or use a chat's **⋯**
+menu to rename, pin, move or archive it. **Library** lists every conversation with
+bulk move, pin, archive and restore. Archiving needs a settled or stopped chat; an
+archived chat leaves the sidebar, is paused and read-only, and agents receive
+nothing from it. **Restore** returns it still paused, so work never resumes by
+itself. Only archived chats can be deleted permanently, after confirmation.
+
+**Appearance and reading.** Settings › Appearance & reading (or the palette icon
+at the bottom of the left rail) offers Ember (default), Midnight, Graphite and
+Evergreen, plus two low-vision schemes: **High visibility** (black on white,
+2 px borders) and **High contrast dark**. Text size goes from 100% to 175%, with
+a low-vision font (Atkinson Hyperlegible), roomier spacing, a thick focus outline,
+reduced motion and status shown as words. **Use low-vision preset** turns these on
+together. Settings are stored per browser, so each person keeps their own. Fonts
+are bundled; the app makes no external font requests.
+
+**Hub admin.** The Admin page shows server and listener status, live activity with
+a **Stop all agents** control, items needing attention (pending approvals,
+expiring credentials, offline connectors), owner password change, signing out other
+owner sessions, an audit log of administrative actions, data location, backups
+(`data/backups/`, credentials excluded), workspace export, and which
+`A2AHUB_TOKEN_*` variables are set (names only).
+
+**Headless mode and the `a2ahub` CLI.** `npm run start:headless` (or
+`A2AHUB_HEADLESS=1 npm start`) serves the same owner API on loopback with no web
+interface. The versioned API lives at `/api/v1`. Scripts authenticate with a
+**manager token** (scopes `read`, `chat`, `admin`), created by the signed-in owner
+on Settings › Headless & manager API or by the CLI:
+
+```powershell
+node scripts/a2ahub.mjs login          # prompts for the owner password, stores a scoped token privately
+node scripts/a2ahub.mjs status
+node scripts/a2ahub.mjs say "Home lab" "Summarize the plan" --watch
+node scripts/a2ahub.mjs stop --all
+node scripts/a2ahub.mjs access approve Helper --code 1A2B3C4D
+node scripts/a2ahub.mjs help
+```
+
+`npm link` makes it available as `a2ahub`. Ctrl+C while watching only detaches;
+agents keep running until you stop them. Manager tokens are shown once and stored
+hashed. They never work as agent credentials, and agent credentials never open the
+owner API. Creating tokens, changing the password and ending sessions require the
+owner's web session. Approving from the CLI requires the verification code. To
+manage a Hub from another computer, tunnel its loopback port (for example
+`ssh -L 4317:127.0.0.1:4317 hub-pc`) rather than exposing it.
+
 One room can have active agents at a time, consistently across browser tabs. Up to ten human-message bursts can be outstanding in that room; each is independently bounded. Native A2A requests have a 180-second timeout; attached conversations have a 30-minute timeout to allow an existing turn to finish. An unavailable, failed, or input-required agent does not block the other members. Input-required tasks are continued only by a later human message. There are no automatic model retries, recurring jobs, or automatic model restarts after reload.
 
 Only selected members receive conversation content. Adding an agent does not send it old history. Continue requires that every current member has received the current topic; send a new message after adding someone. Up to six recent, previously unseen peer messages are included on an agent's next authorized call, including replies that finished at the allowance limit. Each included message is capped at 16,000 characters. Only completed shared replies are forwarded; private-mode replies and streaming fragments are not broadcast.
@@ -97,7 +146,7 @@ An approved agent may belong to several rooms. Each room grants access only from
 
 ## Persistence and credentials
 
-Registrations, room membership, reply settings, pause state, per-agent context IDs, messages, delivery markers, task IDs, and message states are saved atomically in `data/workspace.json`. Rooms survive reloads and server restarts. In-flight replies are marked interrupted after restart and never replayed automatically. Runtime request queues and run counters are not retained. Existing workspace files are migrated additively: registrations and transcripts are retained, old rooms receive an empty member list and peer replies remain off until enabled. New rooms start with peer replies enabled and a six-reply allowance. No old transcript is sent as part of migration. Data is plaintext on this computer; this is a single-user local application.
+Registrations, room membership, reply settings, pause state, folders, pin and archive state, per-agent context IDs, messages, delivery markers, task IDs, and message states are saved atomically in `data/workspace.json`. Folders and the `folderId`, `pinned` and `archived` room fields were added additively: existing rooms start unfiled, unpinned and active. The audit log is `data/audit.json` (last 500 entries, names only); manager-token hashes live with other credentials in `data/owner/access.json`. Rooms survive reloads and server restarts. In-flight replies are marked interrupted after restart and never replayed automatically. Runtime request queues and run counters are not retained. Existing workspace files are migrated additively: registrations and transcripts are retained, old rooms receive an empty member list and peer replies remain off until enabled. New rooms start with peer replies enabled and a six-reply allowance. No old transcript is sent as part of migration. Data is plaintext on this computer; this is a single-user local application.
 
 Outbound agent bearer tokens remain in server environment variables. The form accepts only the variable name, which must begin `A2AHUB_TOKEN_`. Set the real value privately in the environment used to start Node; never paste it into chat or an endpoint URL. Restart the server after environment changes. The app does not read or modify Hermes configuration. Registrations store the variable name, never its value. Redirects and cross-origin advertised endpoints are rejected to avoid forwarding credentials unexpectedly. Inbound credentials are separate: the Hub stores their hashes in private `data/owner/access.json`, and the requesting client stores its credential outside the repository.
 
@@ -117,7 +166,7 @@ Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`,
 
 ## Verification
 
-The chat workflow and existing-conversation adapters pass **84 automated tests** and the production build.
+The chat workflow and existing-conversation adapters pass **87 automated tests** and the production build.
 Checks cover reusable approvals, separate room/history boundaries, removal and
 re-addition, revocation, owner authentication, profile persistence, isolated remote
 agent routes, exactly-once dispatch claims, nonterminal progress, Stop, and the
@@ -166,16 +215,23 @@ model executor, replacement conversation, or new access approval was created.
 This verifies Codex on this PC; Claude Code and Hermes Desktop adapters remain
 mock-tested, and OpenClaw existing-chat attachment remains unimplemented.
 
+The 2026-09-27 redesign (themes, folders/archive, Library, Admin, headless API and
+CLI) adds `test/admin.test.js` and `test/appearance.test.js`. Its UI was checked in
+headless Chromium at 1440 × 960 and 390 × 844 against the mock fixture only; see
+[design/QA.md](design/QA.md).
+
 Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat data and credentials are excluded from this repository.
 
 ## Project structure
 
-- `src/`: React chat interface and responsive styles.
+- `src/`: React chat interface and responsive styles. `appearance.js` holds themes and reading settings; `conversations.jsx`, `library.jsx`, `admin.jsx` and `settings.jsx` are the sidebar list, Library, Admin and Settings pages.
 - `server/index.js`: local HTTP API, room settings, and persistence.
 - `server/chat.js`: concurrent workers, bounded discussions, Continue, interruption, and cancellation.
 - `server/protocol.js`: agent discovery and A2A JSON-RPC transport.
 - `server/access.js`, `server/inbound.js`: owner approval and room-scoped A2A access.
 - `server/dispatch.js`: approved-connector presence, dispatch claims, and cancellation.
+- `server/audit.js`: owner-visible audit log of administrative actions.
+- `scripts/a2ahub.mjs`: manager CLI for the owner API (works with headless mode).
 - `scripts/a2a-connect.mjs`: runs on an agent's computer to connect its native A2A endpoint.
 - `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: exact existing-conversation receivers and correlated read/reply receipts.
 - `src/workspace.jsx`: shared navigation, owner identity, and reusable agent directory.
