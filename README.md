@@ -103,7 +103,11 @@ Evergreen, plus two low-vision schemes: **High visibility** (black on white,
 2 px borders) and **High contrast dark**. Text size goes from 100% to 175%, with
 a low-vision font (Atkinson Hyperlegible), roomier spacing, a thick focus outline,
 reduced motion and status shown as words. **Use low-vision preset** turns these on
-together. Settings are stored per browser, so each person keeps their own. Fonts
+together. On ultrawide monitors (2400 px and wider, such as 3440×1440 or
+5120×1440) the app switches to a wider layout: conversations and agents sit side by
+side, the message column widens while staying readable, and the Admin and Library
+pages use more columns. **Wide screens** can instead center the app at 2560 px or
+1920 px. Settings are stored per browser, so each person keeps their own. Fonts
 are bundled; the app makes no external font requests.
 
 **Hub admin.** The Admin page shows server and listener status, live activity with
@@ -166,7 +170,7 @@ Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`,
 
 ## Verification
 
-The chat workflow and existing-conversation adapters pass **87 automated tests** and the production build.
+The chat workflow and existing-conversation adapters pass **88 automated tests** and the production build.
 Checks cover reusable approvals, separate room/history boundaries, removal and
 re-addition, revocation, owner authentication, profile persistence, isolated remote
 agent routes, exactly-once dispatch claims, nonterminal progress, Stop, and the

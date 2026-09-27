@@ -75,3 +75,17 @@ disposable data) and Playwright with the preinstalled Chromium, headless, at
 Not covered: live model agents, real multi-computer use, screen readers, and
 Windows high-contrast mode. The High contrast dark and Graphite/Evergreen themes
 were checked through their previews only.
+
+## Ultrawide layout (2026-09-27)
+
+Added for a 5120 × 1440 monitor. Above 2400 px the sidebar becomes two columns
+(conversations beside the agent directory), the message and composer column widens
+to 90rem (110rem above 3600 px at full width), the details panel widens, and Admin
+uses four columns (six above 3600 px, fitting every card on one row). Settings ›
+Appearance › **Wide screens** can center the app at 2560 px (still ultrawide) or
+1920 px (standard layout).
+
+Checked against the mock fixture in headless Chromium at 5120 × 1440 (full, 2560
+and 1920), 3440 × 1440, 1440 × 960 and 390 × 844. No horizontal overflow at any
+size, the room menu still opens beside its button when the app is centered, and
+there were no console errors. Not checked on the physical monitor.
