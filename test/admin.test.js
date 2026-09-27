@@ -6,9 +6,48 @@ import net from "node:net";
 import { spawn, execFile } from "node:child_process";
 import { once } from "node:events";
 import { promisify } from "node:util";
+import http from "node:http";
 
 const run = promisify(execFile);
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Minimal A2A 0.3 agent that answers after a delay, without model calls.
+async function mockAgent(name, delay) {
+  let url;
+  const server = http.createServer(async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    if (req.method === "GET") {
+      res.end(JSON.stringify({ name, url, protocolVersion: "0.3" }));
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const call = JSON.parse(body);
+    setTimeout(
+      () =>
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: call.id,
+            result: {
+              kind: "message",
+              role: "agent",
+              parts: [{ kind: "text", text: `${name} reply` }],
+            },
+          }),
+        ),
+      delay,
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  url = `http://127.0.0.1:${server.address().port}/`;
+  return {
+    url,
+    close: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
 async function unusedPort() {
   const socket = net.createServer();
   await new Promise((resolve) => socket.listen(0, "127.0.0.1", resolve));
@@ -161,6 +200,20 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       asAgent.data.error,
       "a manager token must not authenticate as an agent",
     );
+    // Scope checks must follow Express's case-insensitive, slash-tolerant routing.
+    for (const route of [
+      "/api/ADMIN",
+      "/api/Access",
+      "/api/v1/ADMIN/audit",
+      "/api/%61dmin",
+      "/api//admin",
+      "/api/MANAGER-TOKENS",
+    ])
+      assert.equal(
+        (await request(route, undefined, { token: readToken })).status,
+        403,
+        route,
+      );
     // The unversioned path keeps working for the web interface.
     assert.equal(
       (await request("/api/state", undefined, { token: fullToken })).status,
@@ -318,6 +371,58 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       200,
     );
 
+    // An approval for a room that is archived before the agent collects its
+    // credential falls back to directory-only; archived rooms can't be chosen.
+    const raceRoom = (await request("/api/v1/rooms", {}, { token: fullToken }))
+      .data;
+    const racer = (await request("/auth/device", { name: "Racer" })).data;
+    const racerRequest = (
+      await request("/api/v1/access", undefined, { token: fullToken })
+    ).data.requests.find((r) => r.name === "Racer");
+    assert.equal(
+      (
+        await request(
+          `/api/v1/access/${racerRequest.id}/decision`,
+          { approved: true, roomId: raceRoom.id },
+          { token: fullToken },
+        )
+      ).status,
+      200,
+    );
+    await request(
+      `/api/v1/rooms/${raceRoom.id}/archive`,
+      {},
+      {
+        token: fullToken,
+      },
+    );
+    const collected = await request("/auth/token", {
+      device_code: racer.device_code,
+    });
+    assert.equal(collected.status, 200, JSON.stringify(collected.data));
+    const afterRace = (
+      await request(`/api/v1/rooms/${raceRoom.id}`, undefined, {
+        token: fullToken,
+      })
+    ).data;
+    assert.equal(afterRace.archived, true);
+    assert.deepEqual(afterRace.agentIds, []);
+    const racerAccount = (
+      await request("/api/v1/access", undefined, { token: fullToken })
+    ).data.accounts.find((a) => a.name === "Racer");
+    assert.ok(!Object.hasOwn(racerAccount.bindings, raceRoom.id));
+    await request("/auth/device", { name: "Late" });
+    const late = (
+      await request("/api/v1/access", undefined, { token: fullToken })
+    ).data.requests.find((r) => r.name === "Late");
+    const lateDecision = await request(
+      `/api/v1/access/${late.id}/decision`,
+      { approved: true, roomId: raceRoom.id },
+      { token: fullToken },
+    );
+    assert.equal(lateDecision.status, 400);
+    assert.match(lateDecision.data.error, /archived/);
+
     // Admin summary, backup and export never expose secrets.
     const admin = await request("/api/v1/admin", undefined, {
       token: fullToken,
@@ -382,6 +487,78 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       cli(["status"], { A2AHUB_MANAGER_TOKEN: readToken }),
       /lacks the admin scope/,
     );
+
+    // Bodyless CLI mutations must really change server state.
+    const asOwner = { A2AHUB_MANAGER_TOKEN: fullToken };
+    const target = (await request("/api/v1/rooms", {}, { token: fullToken }))
+      .data;
+    await request(
+      `/api/v1/rooms/${target.id}`,
+      { title: "CLI target" },
+      { method: "PATCH", token: fullToken },
+    );
+    const roomState = async () =>
+      (
+        await request(`/api/v1/rooms/${target.id}`, undefined, {
+          token: fullToken,
+        })
+      ).data;
+    await cli(["stop", target.id], asOwner);
+    assert.equal((await roomState()).paused, true);
+    await cli(["resume", target.id], asOwner);
+    assert.equal((await roomState()).paused, false);
+    await cli(["archive", target.id], asOwner);
+    assert.equal((await roomState()).archived, true);
+    await cli(["restore", target.id], asOwner);
+    assert.equal((await roomState()).archived, false);
+    const backupOut = (await cli(["backup"], asOwner)).stdout;
+    assert.doesNotMatch(backupOut, /undefined/);
+    const backupFile = backupOut.match(/Backup written to (.+)$/m)[1].trim();
+    assert.ok(fs.existsSync(backupFile));
+    assert.deepEqual(
+      JSON.parse((await cli(["stop", "--all", "--json"], asOwner)).stdout)
+        .stopped,
+      [],
+    );
+
+    // say --watch shows every reply of its burst and exits 0 when it ends.
+    const alpha = await mockAgent("Alpha", 400);
+    const beta = await mockAgent("Beta", 50);
+    try {
+      const a = await request(
+        "/api/v1/agents",
+        { url: alpha.url },
+        {
+          token: fullToken,
+        },
+      );
+      const b = await request(
+        "/api/v1/agents",
+        { url: beta.url },
+        {
+          token: fullToken,
+        },
+      );
+      assert.equal(a.status, 200, JSON.stringify(a.data));
+      await request(
+        `/api/v1/rooms/${target.id}`,
+        { agentIds: [a.data.id, b.data.id], agentChat: false, replyLimit: 2 },
+        { method: "PATCH", token: fullToken },
+      );
+      // Restore kept the room paused; resuming is explicit.
+      await cli(["resume", target.id], asOwner);
+      const watched = await cli(
+        ["say", target.id, "Hello", "agents", "--watch"],
+        asOwner,
+      );
+      assert.match(watched.stdout, /Alpha reply/);
+      assert.match(watched.stdout, /Beta reply/);
+      assert.match(watched.stdout, /completed · 2\/2 requests/);
+      assert.doesNotMatch(watched.stderr, /abort/i);
+    } finally {
+      alpha.close();
+      beta.close();
+    }
     const passwordFile = path.join(dir, "pw.txt");
     fs.writeFileSync(passwordFile, "admin-mock-owner\n");
     const loggedIn = await cli([

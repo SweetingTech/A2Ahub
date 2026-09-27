@@ -119,12 +119,19 @@ async function api(route, body, method = body === undefined ? "GET" : "POST") {
   } catch {
     fail(`Cannot reach A2Ahub at ${origin}. Is it running?`);
   }
-  const data = await res.json().catch(() => ({}));
+  // Only JSON from the API counts; an HTML page means the request missed it.
+  const isJson = (res.headers.get("content-type") || "").includes(
+    "application/json",
+  );
+  const data = isJson ? await res.json().catch(() => null) : null;
   if (res.status === 401)
     fail("The saved token was rejected. Run: a2ahub login");
-  if (!res.ok) fail(data.error || `Request failed (${res.status}).`);
+  if (!res.ok) fail(data?.error || `Request failed (${res.status}).`);
+  if (!data) fail(`Unexpected response from ${origin}. Is this A2Ahub?`);
   return data;
 }
+// Mutations always POST, even without a body.
+const post = (route, body = {}) => api(route, body, "POST");
 
 function print(value, human) {
   if (json) console.log(JSON.stringify(value, null, 2));
@@ -289,7 +296,7 @@ function printMessage(m) {
 const settled = (m) =>
   m.role === "user" || !["working", "submitted"].includes(m.state);
 
-async function watch(room, runId) {
+async function watch(room, runId, from) {
   const origin = hubOrigin();
   const controller = new AbortController();
   process.once("SIGINT", () => {
@@ -319,8 +326,10 @@ async function watch(room, runId) {
     while ((index = buffer.indexOf("\n\n")) >= 0) {
       const event = buffer.slice(0, index);
       buffer = buffer.slice(index + 2);
-      if (event.startsWith("event: auth-expired"))
+      if (event.startsWith("event: auth-expired")) {
+        await res.body.cancel().catch(() => {});
         fail("The manager token was revoked.");
+      }
       const data = event
         .split("\n")
         .filter((l) => l.startsWith("data: "))
@@ -330,11 +339,10 @@ async function watch(room, runId) {
       const state = JSON.parse(data);
       const current = state.rooms.find((r) => r.id === room.id);
       if (!current) fail("The conversation was deleted.");
-      // Without a new run, show only what arrives from now on.
+      // A new burst starts at the index the server reported; otherwise
+      // show only what arrives from now on.
       if (baseline === null) {
-        baseline = runId
-          ? Math.max(0, current.messages.length - 1)
-          : current.messages.length;
+        baseline = Number.isInteger(from) ? from : current.messages.length;
         current.messages.slice(0, baseline).forEach((m) => printed.add(m.id));
       }
       for (const m of current.messages) {
@@ -357,7 +365,8 @@ async function watch(room, runId) {
         }
       }
       if (runId && run && !["running", "stopping"].includes(run.state)) {
-        controller.abort();
+        // Leaving the loop cancels the stream cleanly; aborting here would
+        // surface as an error after a successful run.
         return;
       }
     }
@@ -480,33 +489,33 @@ async function main() {
       const room = await findRoom(sub);
       const text = rest.join(" ");
       if (!text) fail('Usage: a2ahub say ROOM "message"');
-      const run = await api(`/rooms/${room.id}/messages`, { text });
+      const run = await post(`/rooms/${room.id}/messages`, { text });
       if (!json)
         console.log(
           `→ Sent to ${room.title}. Burst ${run.id.slice(0, 8)} started.`,
         );
       else print(run, () => {});
-      if (flags.watch) await watch(room, run.id);
+      if (flags.watch) await watch(room, run.id, run.from);
       return;
     }
     case "continue": {
       const room = await findRoom(sub);
-      const run = await api(`/rooms/${room.id}/continue`);
+      const run = await post(`/rooms/${room.id}/continue`);
       print(run, () => console.log(`→ Continuing ${room.title}.`));
-      if (flags.watch) await watch(room, run.id);
+      if (flags.watch) await watch(room, run.id, run.from);
       return;
     }
     case "watch":
       return watch(await findRoom(sub));
     case "stop": {
       if (flags.all || sub === "--all") {
-        const result = await api("/admin/stop-all");
+        const result = await post("/admin/stop-all");
         return print(result, (r) =>
           console.log(`✓ Stopped ${r.stopped.length} active conversation(s).`),
         );
       }
       const room = await findRoom(sub);
-      await api(`/rooms/${room.id}/stop`);
+      await post(`/rooms/${room.id}/stop`);
       return print({ ok: true }, () =>
         console.log(
           `✓ Stopped ${room.title}. Remote cancellation was attempted; already-started work may continue.`,
@@ -522,7 +531,7 @@ async function main() {
         archive: "archive",
         restore: "unarchive",
       }[command];
-      await api(`/rooms/${room.id}/${route}`);
+      await post(`/rooms/${room.id}/${route}`);
       return print({ ok: true }, () =>
         console.log(`✓ ${command} ${room.title}`),
       );
@@ -666,7 +675,7 @@ async function main() {
       fail("Usage: a2ahub access [approve|deny|revoke] …");
     }
     case "backup": {
-      const result = await api("/admin/backup");
+      const result = await post("/admin/backup");
       return print(result, (r) => console.log(`✓ Backup written to ${r.file}`));
     }
     case "tokens":

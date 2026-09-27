@@ -88,7 +88,7 @@ save();
 const clients = new Map();
 const access = new Access(dataDir);
 const audit = new Audit(dataDir);
-access.migrateRooms(db.rooms);
+access.migrateRooms(db.rooms, { canJoinRoom: (r) => !r.archived });
 save();
 const broker = new DispatchBroker({
   isAuthorized: (accountId, roomId) =>
@@ -230,7 +230,7 @@ app.post("/auth/device", (req, res) => {
 app.post("/auth/token", (req, res) => {
   const credential = access.poll(req.body.device_code, {
     rooms: db.rooms,
-    canJoinRoom: (room) => !chat.active(room.id).length,
+    canJoinRoom: (room) => !room.archived && !chat.active(room.id).length,
   });
   publish();
   res.json(credential);
@@ -244,7 +244,15 @@ mountInbound(app, { access, db, publish, origin, broker, onPost });
 // conversation work needs "chat"; everything else (access, agents, admin,
 // profile) needs "admin". Some routes additionally require the owner session.
 function requiredScope(req) {
-  const route = req.path;
+  // Express matches routes case-insensitively and tolerates repeated or
+  // encoded slashes, so classify a normalized path, never the raw one.
+  let route = req.path;
+  try {
+    route = decodeURIComponent(route);
+  } catch {
+    return "admin"; // Malformed escapes get the strictest scope.
+  }
+  route = route.toLowerCase().replace(/\/{2,}/g, "/");
   if (req.method === "GET")
     return /^\/(admin|access|manager-tokens)(\/|$)/.test(route)
       ? "admin"
@@ -300,6 +308,8 @@ app.post("/api/access/:id/decision", (req, res) => {
     throw new Error("Choose Approve or Deny.");
   if (req.body.roomId && !db.rooms.some((r) => r.id === req.body.roomId))
     throw new Error("Conversation not found.");
+  if (db.rooms.find((r) => r.id === req.body.roomId)?.archived)
+    throw new Error("That conversation is archived. Restore it first.");
   const pending = access.list().requests.find((r) => r.id === req.params.id);
   access.decide(
     req.params.id,
@@ -617,9 +627,12 @@ app.post("/api/rooms/:id/continue", (req, res) => {
       "Wait for the current discussion to finish or stop agents first.",
     );
   const agents = validateMembers(r.agentIds);
+  const from = r.messages.length;
   const run = chat.start(r, agents, null);
   audit.record("room.continued", { actor: actor(req), room: r.title });
-  res.status(202).json({ id: run.id });
+  // "from" is the first message index belonging to this burst, so watchers
+  // can show every reply it produces.
+  res.status(202).json({ id: run.id, from });
 });
 app.post("/api/runs/:id/stop", async (req, res) => {
   const run = chat.runs.get(req.params.id);
@@ -632,10 +645,11 @@ function startMessage(req, res, roomId, text) {
   if (typeof text !== "string" || !text.trim() || text.length > 12000)
     throw new Error("Enter a message of 1–12,000 characters.");
   const agents = validateMembers(r.agentIds);
+  const from = r.messages.length;
   const run = chat.start(r, agents, text.trim());
   if (req.actor?.kind === "manager")
     audit.record("room.message", { actor: actor(req), room: r.title });
-  res.status(202).json({ id: run.id });
+  res.status(202).json({ id: run.id, from });
 }
 app.post("/api/runs", (req, res) =>
   startMessage(req, res, req.body?.roomId, req.body?.text),
@@ -939,7 +953,7 @@ if (process.env.A2AHUB_AGENT_PORT) {
   remote.post("/auth/token", (req, res) => {
     const credential = access.poll(req.body.device_code, {
       rooms: db.rooms,
-      canJoinRoom: (room) => !chat.active(room.id).length,
+      canJoinRoom: (room) => !room.archived && !chat.active(room.id).length,
     });
     publish();
     res.json(credential);
