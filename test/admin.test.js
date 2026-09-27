@@ -1,0 +1,465 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import net from "node:net";
+import { spawn, execFile } from "node:child_process";
+import { once } from "node:events";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function unusedPort() {
+  const socket = net.createServer();
+  await new Promise((resolve) => socket.listen(0, "127.0.0.1", resolve));
+  const port = socket.address().port;
+  await new Promise((resolve) => socket.close(resolve));
+  return port;
+}
+
+test("headless owner API: manager token scopes, folders, archive, admin, password and CLI", async () => {
+  fs.mkdirSync("work", { recursive: true });
+  const dir = fs.mkdtempSync(path.resolve("work/admin-"));
+  const cliHome = path.join(dir, "cli");
+  const port = await unusedPort();
+  const origin = `http://127.0.0.1:${port}`;
+  let output = "";
+  const child = spawn(process.execPath, ["server/index.js", "--headless"], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      A2AHUB_DATA_DIR: dir,
+      A2AHUB_OWNER_PASSWORD: "admin-mock-owner",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  child.stdout.on("data", (b) => (output += b));
+  child.stderr.on("data", (b) => (output += b));
+  async function request(route, body, { method, cookie, token } = {}) {
+    const response = await fetch(origin + route, {
+      method: method || (body === undefined ? "GET" : "POST"),
+      headers: {
+        "Content-Type": "application/json",
+        ...(cookie ? { Cookie: cookie } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+    return { status: response.status, data, response };
+  }
+  async function login(password = "admin-mock-owner") {
+    const result = await request("/auth/login", { password });
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    return result.response.headers.get("set-cookie").split(";")[0];
+  }
+  async function cli(args, env = {}) {
+    return run(process.execPath, ["scripts/a2ahub.mjs", ...args], {
+      env: {
+        ...process.env,
+        A2AHUB_URL: origin,
+        A2AHUB_CLI_HOME: cliHome,
+        A2AHUB_OWNER_PASSWORD: "",
+        ...env,
+      },
+    });
+  }
+  try {
+    for (let i = 0; i < 100; i++) {
+      try {
+        if ((await fetch(origin + "/auth/session")).ok) break;
+      } catch {}
+      if (child.exitCode !== null) throw new Error(output);
+      await pause(50);
+    }
+    assert.match(output, /headless API ready/);
+
+    // Headless serves JSON only; no web interface is mounted.
+    const rootInfo = await request("/");
+    assert.equal(rootInfo.data.headless, true);
+    assert.equal(rootInfo.data.api, `${origin}/api/v1`);
+    const page = await request("/agents");
+    assert.equal(page.status, 404);
+    assert.doesNotMatch(JSON.stringify(page.data), /<html/i);
+    const session = await request("/auth/session");
+    assert.equal(session.data.headless, true);
+    assert.equal(session.data.passwordLocation, null);
+
+    const cookie = await login();
+    const full = await request(
+      "/api/v1/manager-tokens",
+      { name: "test-full", scopes: ["read", "chat", "admin"] },
+      { cookie },
+    );
+    assert.equal(full.status, 201, JSON.stringify(full.data));
+    assert.match(full.data.token, /^a2m_/);
+    assert.equal(full.data.tokenHash, undefined);
+    const reader = await request(
+      "/api/v1/manager-tokens",
+      { name: "test-read", scopes: ["read"] },
+      { cookie },
+    );
+    const fullToken = full.data.token,
+      readToken = reader.data.token;
+
+    // Scope enforcement and separation from owner-only and agent routes.
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: readToken })).status,
+      200,
+    );
+    assert.equal(
+      (await request("/api/v1/rooms", {}, { token: readToken })).status,
+      403,
+    );
+    assert.equal(
+      (await request("/api/v1/admin", undefined, { token: readToken })).status,
+      403,
+    );
+    assert.equal(
+      (
+        await request(
+          "/api/v1/manager-tokens",
+          { name: "escalate", scopes: ["admin"] },
+          { token: fullToken },
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await request(
+          "/api/v1/admin/password",
+          { current: "x", next: "y" },
+          { token: fullToken },
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: "a2m_wrong" }))
+        .status,
+      401,
+    );
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: "hub_agent" }))
+        .status,
+      401,
+    );
+    const asAgent = await request(
+      "/a2a/jsonrpc",
+      { jsonrpc: "2.0", id: "1", method: "SendMessage", params: {} },
+      { token: fullToken },
+    );
+    assert.ok(
+      asAgent.data.error,
+      "a manager token must not authenticate as an agent",
+    );
+    // The unversioned path keeps working for the web interface.
+    assert.equal(
+      (await request("/api/state", undefined, { token: fullToken })).status,
+      200,
+    );
+
+    // Folders and filing.
+    const folder = await request(
+      "/api/v1/folders",
+      { name: "Home lab", color: "teal" },
+      { token: fullToken },
+    );
+    assert.equal(folder.status, 200, JSON.stringify(folder.data));
+    assert.equal(
+      (
+        await request(
+          "/api/v1/folders",
+          { name: "Bad", color: "neon" },
+          { token: fullToken },
+        )
+      ).status,
+      400,
+    );
+    const room = (
+      await request(
+        "/api/v1/rooms",
+        { folderId: folder.data.id },
+        { token: fullToken },
+      )
+    ).data;
+    assert.equal(room.folderId, folder.data.id);
+    assert.equal(
+      (
+        await request(
+          `/api/v1/rooms/${room.id}`,
+          { pinned: true },
+          { method: "PATCH", token: fullToken },
+        )
+      ).data.pinned,
+      true,
+    );
+    await request(`/api/v1/folders/${folder.data.id}`, undefined, {
+      method: "DELETE",
+      token: fullToken,
+    });
+    const unfiled = (
+      await request(`/api/v1/rooms/${room.id}`, undefined, { token: fullToken })
+    ).data;
+    assert.equal(unfiled.folderId, null);
+
+    // Archive is read-only and paused; restore stays paused; delete needs archive.
+    assert.equal(
+      (
+        await request(`/api/v1/rooms/${room.id}`, undefined, {
+          method: "DELETE",
+          token: fullToken,
+        })
+      ).status,
+      400,
+    );
+    const archived = (
+      await request(
+        `/api/v1/rooms/${room.id}/archive`,
+        {},
+        { token: fullToken },
+      )
+    ).data;
+    assert.equal(archived.archived, true);
+    assert.equal(archived.paused, true);
+    for (const route of [
+      `/rooms/${room.id}/messages`,
+      `/rooms/${room.id}/continue`,
+      `/rooms/${room.id}/resume`,
+    ]) {
+      const blocked = await request(
+        `/api/v1${route}`,
+        { text: "hello" },
+        { token: fullToken },
+      );
+      assert.equal(blocked.status, 400, route);
+      assert.match(blocked.data.error, /archived/i);
+    }
+    assert.equal(
+      (
+        await request(
+          `/api/v1/rooms/${room.id}`,
+          { replyLimit: 3 },
+          { method: "PATCH", token: fullToken },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(
+          `/api/v1/rooms/${room.id}`,
+          { title: "Old notes" },
+          { method: "PATCH", token: fullToken },
+        )
+      ).status,
+      200,
+    );
+    const restored = (
+      await request(
+        `/api/v1/rooms/${room.id}/unarchive`,
+        {},
+        { token: fullToken },
+      )
+    ).data;
+    assert.equal(restored.archived, false);
+    assert.equal(restored.paused, true, "restoring must not resume agents");
+    await request(`/api/v1/rooms/${room.id}/archive`, {}, { token: fullToken });
+    assert.equal(
+      (
+        await request(`/api/v1/rooms/${room.id}`, undefined, {
+          method: "DELETE",
+          token: fullToken,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await request(`/api/v1/rooms/${room.id}`, undefined, {
+          token: fullToken,
+        })
+      ).status,
+      400,
+    );
+
+    // Device approval from a screenless client must echo the verification code.
+    const device = await request("/auth/device", { name: "Helper" });
+    assert.equal(device.status, 201);
+    const pending = (
+      await request("/api/v1/access", undefined, { token: fullToken })
+    ).data.requests[0];
+    assert.equal(
+      (
+        await request(
+          `/api/v1/access/${pending.id}/decision`,
+          { approved: true, userCode: "WRONG" },
+          { token: fullToken },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(
+          `/api/v1/access/${pending.id}/decision`,
+          { approved: true, userCode: pending.userCode.toLowerCase() },
+          { token: fullToken },
+        )
+      ).status,
+      200,
+    );
+
+    // Admin summary, backup and export never expose secrets.
+    const admin = await request("/api/v1/admin", undefined, {
+      token: fullToken,
+    });
+    assert.equal(admin.status, 200);
+    assert.equal(admin.data.server.headless, true);
+    assert.equal(admin.data.listeners.owner.loopbackOnly, true);
+    assert.equal(admin.data.counts.managerTokens, 2);
+    const adminText = JSON.stringify(admin.data);
+    assert.ok(
+      !adminText.includes(fullToken) && !adminText.includes("admin-mock-owner"),
+    );
+    const backup = await request(
+      "/api/v1/admin/backup",
+      {},
+      { token: fullToken },
+    );
+    assert.ok(fs.existsSync(backup.data.file));
+    assert.ok(backup.data.file.startsWith(path.join(dir, "backups")));
+    const exported = await request("/api/v1/admin/export", undefined, {
+      token: fullToken,
+    });
+    assert.ok(Array.isArray(exported.data.workspace.rooms));
+    assert.match(
+      exported.response.headers.get("content-disposition"),
+      /attachment/,
+    );
+    assert.deepEqual(
+      (await request("/api/v1/admin/stop-all", {}, { token: fullToken })).data
+        .stopped,
+      [],
+    );
+    const auditText = fs.readFileSync(path.join(dir, "audit.json"), "utf8");
+    for (const action of [
+      "manager_token.created",
+      "room.archived",
+      "room.deleted",
+      "access.approved",
+      "admin.backup",
+    ])
+      assert.match(auditText, new RegExp(action.replace(".", "\\.")));
+    assert.ok(!auditText.includes(fullToken) && !auditText.includes("a2m_"));
+
+    // CLI against the token; login creates its own private token.
+    const status = JSON.parse(
+      (await cli(["status", "--json"], { A2AHUB_MANAGER_TOKEN: fullToken }))
+        .stdout,
+    );
+    assert.equal(status.server.headless, true);
+    await cli(["folder", "create", "Writing", "--color", "purple"], {
+      A2AHUB_MANAGER_TOKEN: fullToken,
+    });
+    await cli(["new", "Blog", "draft", "--folder", "Writing"], {
+      A2AHUB_MANAGER_TOKEN: fullToken,
+    });
+    const rooms = JSON.parse(
+      (await cli(["rooms", "--json"], { A2AHUB_MANAGER_TOKEN: fullToken }))
+        .stdout,
+    );
+    assert.ok(rooms.some((r) => r.title === "Blog draft"));
+    await assert.rejects(
+      cli(["status"], { A2AHUB_MANAGER_TOKEN: readToken }),
+      /lacks the admin scope/,
+    );
+    const passwordFile = path.join(dir, "pw.txt");
+    fs.writeFileSync(passwordFile, "admin-mock-owner\n");
+    const loggedIn = await cli([
+      "login",
+      "--name",
+      "cli-test",
+      "--password-file",
+      passwordFile,
+    ]);
+    assert.doesNotMatch(loggedIn.stdout, /a2m_|admin-mock-owner/);
+    const config = JSON.parse(
+      fs.readFileSync(path.join(cliHome, "manager.json"), "utf8"),
+    );
+    assert.match(config.token, /^a2m_/);
+    if (process.platform !== "win32")
+      assert.equal(
+        fs.statSync(path.join(cliHome, "manager.json")).mode & 0o077,
+        0,
+      );
+    const listed = JSON.parse((await cli(["tokens", "--json"])).stdout);
+    assert.ok(listed.some((t) => t.name === "cli-test"));
+    await cli(["logout"]);
+    assert.ok(!fs.existsSync(path.join(cliHome, "manager.json")));
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: config.token }))
+        .status,
+      401,
+    );
+
+    // Password change: validation, old password rejected, file removed.
+    const shortPw = await request(
+      "/api/v1/admin/password",
+      { current: "admin-mock-owner", next: "short" },
+      { cookie },
+    );
+    assert.equal(shortPw.status, 400);
+    const wrongPw = await request(
+      "/api/v1/admin/password",
+      { current: "nope", next: "a-much-longer-password" },
+      { cookie },
+    );
+    assert.equal(wrongPw.status, 401);
+    const otherSession = await login();
+    const changed = await request(
+      "/api/v1/admin/password",
+      { current: "admin-mock-owner", next: "a-much-longer-password" },
+      { cookie },
+    );
+    assert.equal(changed.status, 200);
+    assert.equal(
+      (await request("/api/v1/state", undefined, { cookie })).status,
+      200,
+    );
+    assert.equal(
+      (await request("/api/v1/state", undefined, { cookie: otherSession }))
+        .status,
+      401,
+    );
+    assert.equal(
+      (await request("/auth/login", { password: "admin-mock-owner" })).status,
+      401,
+    );
+    await login("a-much-longer-password");
+
+    // A token can revoke itself; afterwards it is rejected.
+    await request(`/api/v1/manager-tokens/${reader.data.id}`, undefined, {
+      method: "DELETE",
+      token: readToken,
+    });
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: readToken })).status,
+      401,
+    );
+  } finally {
+    if (child.exitCode === null) {
+      const ended = once(child, "exit");
+      child.kill();
+      await ended;
+    }
+  }
+});

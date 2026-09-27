@@ -3,10 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "a2ahub": "scripts/a2ahub.mjs"
+  },
   "scripts": {
     "dev": "node server/index.js --dev",
     "build": "vite build",
     "start": "node server/index.js",
+    "start:headless": "node server/index.js --headless",
+    "cli": "node scripts/a2ahub.mjs",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
