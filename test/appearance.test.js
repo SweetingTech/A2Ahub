@@ -4,6 +4,7 @@ import {
   applyAppearance,
   DEFAULT_APPEARANCE,
   LOW_VISION_PRESET,
+  loadAppearance,
   resolveTheme,
 } from "../src/appearance.js";
 
@@ -48,4 +49,26 @@ test("applying appearance sets theme, scale and forced thick focus for low visio
     "high contrast always gets a thick focus ring",
   );
   assert.equal(root.style.colorScheme, "dark");
+});
+
+test("wide-screen layout is applied and invalid values fall back to full width", () => {
+  const root = {
+    dataset: {},
+    style: {
+      setProperty(k, v) {
+        this[k] = v;
+      },
+    },
+  };
+  globalThis.matchMedia = () => ({ matches: false });
+  applyAppearance({ ...DEFAULT_APPEARANCE, layout: "2560" }, root);
+  assert.equal(root.dataset.layout, "2560");
+  assert.equal(DEFAULT_APPEARANCE.layout, "full");
+  const stored = new Map([
+    ["a2ahub-appearance", JSON.stringify({ layout: "8k-wall" })],
+  ]);
+  globalThis.localStorage = { getItem: (k) => stored.get(k) ?? null };
+  assert.equal(loadAppearance().layout, "full");
+  stored.set("a2ahub-appearance", JSON.stringify({ layout: "1920" }));
+  assert.equal(loadAppearance().layout, "1920");
 });

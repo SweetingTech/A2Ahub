@@ -25,6 +25,21 @@ export const DENSITIES = [
   { id: "comfortable", name: "Comfortable" },
   { id: "roomy", name: "Roomy" },
 ];
+// Ultrawide monitors (e.g. 5120×1440) get a multi-column layout at full
+// width; people who prefer less head-turning can center the app instead.
+export const LAYOUTS = [
+  {
+    id: "full",
+    name: "Use the full width",
+    note: "Ultrawide layout above 2400 px",
+  },
+  {
+    id: "2560",
+    name: "Center at 2560 px",
+    note: "Still uses the ultrawide layout",
+  },
+  { id: "1920", name: "Center at 1920 px", note: "Standard layout, centered" },
+];
 export const DEFAULT_APPEARANCE = {
   theme: "ember",
   followSystem: false,
@@ -34,6 +49,7 @@ export const DEFAULT_APPEARANCE = {
   statusLabels: true,
   thickFocus: false,
   reduceMotion: false,
+  layout: "full",
 };
 // One-click starting point for low vision; every value stays adjustable.
 export const LOW_VISION_PRESET = {
@@ -45,6 +61,7 @@ export const LOW_VISION_PRESET = {
   statusLabels: true,
   thickFocus: true,
   reduceMotion: true,
+  layout: "full",
 };
 const KEY = "a2ahub-appearance";
 
@@ -68,6 +85,7 @@ function sanitize(a) {
     statusLabels: a.statusLabels !== false,
     thickFocus: a.thickFocus === true,
     reduceMotion: a.reduceMotion === true,
+    layout: LAYOUTS.some((l) => l.id === a.layout) ? a.layout : "full",
   };
 }
 export function saveAppearance(a) {
@@ -99,6 +117,7 @@ export function applyAppearance(a, root = document.documentElement) {
     a.thickFocus || ["hivis", "hcdark"].includes(theme) ? "thick" : "normal";
   root.dataset.motion = a.reduceMotion ? "reduce" : "normal";
   root.dataset.statusLabels = a.statusLabels ? "on" : "off";
+  root.dataset.layout = a.layout || "full";
   root.style.setProperty("--text-scale", String(a.textSize / 100));
   root.style.colorScheme = THEMES.find((t) => t.id === theme)?.dark
     ? "dark"

@@ -3497,3 +3497,134 @@ summary {
     font-size: 1.4rem;
   }
 }
+
+/* ---------- Wide and ultrawide screens ---------- */
+/* Optional centering for very wide monitors (Settings › Wide screens). */
+[data-layout="2560"] .app,
+[data-layout="1920"] .app {
+  margin-inline: auto;
+  border-inline: var(--border-w) solid var(--line);
+}
+[data-layout="2560"] .app {
+  max-width: 2560px;
+}
+[data-layout="1920"] .app {
+  max-width: 1920px;
+}
+/* The composer lines up with the message column instead of stretching. */
+.compose-wrap {
+  width: 100%;
+  max-width: 66rem;
+  margin-inline: auto;
+}
+
+/* Ultrawide (e.g. 3440×1440, 5120×1440): conversations and agents sit side
+   by side, messages get a wider but still readable column, and pages use
+   more columns. Skipped when the app is centered at 1920 px. */
+@media (min-width: 2400px) {
+  :root:not([data-layout="1920"]) {
+    --rail-w: 84px;
+    --sidebar-w: 620px;
+    --details-w: 440px;
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-auto-rows: min-content;
+    align-content: start;
+    column-gap: 1.25rem;
+    row-gap: 0.75rem;
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar > .sidebar-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar > .conversation-list {
+    grid-column: 1;
+    grid-row: 2 / span 6;
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar > .section-heading {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+    padding-bottom: 0.5rem;
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar > .agents {
+    grid-column: 2;
+    grid-row: 2;
+    max-height: calc(100dvh - 16rem);
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar > .browse {
+    grid-column: 2;
+    grid-row: 3;
+  }
+  :root:not([data-layout="1920"]) .chat-page > .sidebar > .hub-status {
+    grid-column: 2;
+    grid-row: 4;
+    margin-top: 0.5rem;
+  }
+  :root:not([data-layout="1920"]) .room-groups {
+    max-height: calc(100dvh - 15rem);
+  }
+  :root:not([data-layout="1920"]) .messages {
+    max-width: 90rem;
+  }
+  :root:not([data-layout="1920"]) .compose-wrap {
+    max-width: 94rem;
+  }
+  :root:not([data-layout="1920"]) .message-body {
+    max-width: min(56rem, 78%);
+  }
+  :root:not([data-layout="1920"]) .page-content {
+    padding: 2.25rem 3rem 3rem;
+  }
+  :root:not([data-layout="1920"]) .admin-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  :root:not([data-layout="1920"]) .library-page {
+    grid-template-columns: 18rem minmax(0, 1fr);
+  }
+  :root:not([data-layout="1920"]) .settings-panel {
+    max-width: 130rem;
+  }
+  :root:not([data-layout="1920"]) .appearance-layout {
+    grid-template-columns: minmax(0, 1fr) 28rem;
+  }
+}
+/* Super-ultrawide at full width (5120 px class). */
+@media (min-width: 3600px) {
+  :root[data-layout="full"] {
+    --sidebar-w: 680px;
+    --details-w: 520px;
+  }
+  :root[data-layout="full"] .messages {
+    max-width: 110rem;
+  }
+  :root[data-layout="full"] .compose-wrap {
+    max-width: 114rem;
+  }
+  :root[data-layout="full"] .message-body {
+    max-width: min(64rem, 72%);
+  }
+  /* Six tracks fit every card, including the two-wide activity card, on one row. */
+  :root[data-layout="full"] .admin-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+.layout-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.layout-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem 0;
+  text-align: left;
+}
+.layout-option small {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--muted);
+}

@@ -5,6 +5,7 @@ import {
   FONTS,
   LOW_VISION_PRESET,
   DEFAULT_APPEARANCE,
+  LAYOUTS,
   TEXT_SIZES,
   THEMES,
 } from "./appearance.js";
@@ -161,6 +162,12 @@ function Choice({ name, options, value, onChange, render }) {
 
 function AppearancePanel({ value, onChange }) {
   const set = (patch) => onChange({ ...value, ...patch });
+  const [screenWidth, setScreenWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const resize = () => setScreenWidth(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
   return (
     <div className="appearance-layout">
       <div className="appearance-controls">
@@ -219,7 +226,9 @@ function AppearancePanel({ value, onChange }) {
             <h2>Reading comfort</h2>
             <button
               className="outline small"
-              onClick={() => onChange({ ...LOW_VISION_PRESET })}
+              onClick={() =>
+                onChange({ ...LOW_VISION_PRESET, layout: value.layout })
+              }
             >
               <Eye size={15} /> Use low-vision preset
             </button>
@@ -256,6 +265,27 @@ function AppearancePanel({ value, onChange }) {
               value={value.density}
               onChange={(density) => set({ density })}
             />
+            <span className="comfort-label">Wide screens</span>
+            <div className="layout-choice">
+              <Choice
+                name="Wide screens"
+                options={LAYOUTS}
+                value={value.layout}
+                onChange={(layout) => set({ layout })}
+                render={(l) => (
+                  <span className="layout-option">
+                    <strong>{l.name}</strong>
+                    <small>{l.note}</small>
+                  </span>
+                )}
+              />
+              <small className="hint">
+                This window is {screenWidth} px wide
+                {screenWidth >= 2400
+                  ? " — ultrawide layout available."
+                  : "; the ultrawide layout starts at 2400 px."}
+              </small>
+            </div>
           </div>
           <div className="toggle-grid">
             <label className="check-label">
@@ -285,7 +315,9 @@ function AppearancePanel({ value, onChange }) {
           </div>
           <button
             className="text-button"
-            onClick={() => onChange({ ...DEFAULT_APPEARANCE })}
+            onClick={() =>
+              onChange({ ...DEFAULT_APPEARANCE, layout: value.layout })
+            }
           >
             Reset to defaults
           </button>
