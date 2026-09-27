@@ -282,11 +282,13 @@ export function AccessPage({ agentOrigin = location.origin, onAgents }) {
               }
             >
               <option value="">Directory only — choose a chat later</option>
-              {rooms.map((room) => (
-                <option key={room.id} value={room.id}>
-                  {room.title}
-                </option>
-              ))}
+              {rooms
+                .filter((room) => !room.archived)
+                .map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.title}
+                  </option>
+                ))}
             </select>
             <div className="access-actions">
               <button

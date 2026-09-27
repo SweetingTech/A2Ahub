@@ -580,10 +580,54 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       );
     const listed = JSON.parse((await cli(["tokens", "--json"])).stdout);
     assert.ok(listed.some((t) => t.name === "cli-test"));
-    await cli(["logout"]);
-    assert.ok(!fs.existsSync(path.join(cliHome, "manager.json")));
+    const configFile = path.join(cliHome, "manager.json");
+
+    // Logging in again replaces the saved token and revokes the old one.
+    const relogin = JSON.parse(
+      (
+        await cli([
+          "login",
+          "--name",
+          "cli-test-2",
+          "--password-file",
+          passwordFile,
+          "--json",
+        ])
+      ).stdout,
+    );
+    assert.equal(relogin.previousRevoked, true);
+    const config2 = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    assert.notEqual(config2.token, config.token);
     assert.equal(
       (await request("/api/v1/state", undefined, { token: config.token }))
+        .status,
+      401,
+    );
+
+    // "--" preserves text that looks like an option.
+    await cli(["new", "--", "--compare", "plans"]);
+    assert.ok(
+      JSON.parse((await cli(["rooms", "--json"])).stdout).some(
+        (r) => r.title === "--compare plans",
+      ),
+    );
+
+    // Logout keeps the only copy when revocation cannot be confirmed.
+    const deadHub = `http://127.0.0.1:${await unusedPort()}`;
+    await assert.rejects(
+      cli(["logout"], { A2AHUB_URL: deadHub }),
+      /still saved/,
+    );
+    assert.ok(fs.existsSync(configFile));
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: config2.token }))
+        .status,
+      200,
+    );
+    await cli(["logout"]);
+    assert.ok(!fs.existsSync(configFile));
+    assert.equal(
+      (await request("/api/v1/state", undefined, { token: config2.token }))
         .status,
       401,
     );

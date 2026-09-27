@@ -11,7 +11,9 @@ const HELP = `a2ahub — manage a local A2Ahub from the command line
 
 Setup
   a2ahub login [--name NAME] [--scopes read,chat,admin] [--password-file FILE]
-  a2ahub logout                      Revoke and forget this CLI's token
+  a2ahub logout [--local]            Revoke and forget this CLI's token
+                                     (--local forgets it even if the Hub
+                                     cannot be reached to revoke it)
 
 Overview
   a2ahub status                      Hub health, activity and attention items
@@ -44,17 +46,30 @@ Data
   a2ahub tokens                      List manager tokens
 
 Options: --json for machine-readable output, --url to choose the Hub.
+Put -- before text that starts with "--": a2ahub say ROOM -- "--compare plans"
 Environment: A2AHUB_URL, A2AHUB_MANAGER_TOKEN, A2AHUB_CLI_HOME.
 Ctrl+C while watching only detaches; agents keep running until you stop them.`;
 
 const argv = process.argv.slice(2);
 const flags = {};
 const positional = [];
+const BOOLEAN_FLAGS = [
+  "--json",
+  "--watch",
+  "--all",
+  "--archived",
+  "--help",
+  "--local",
+];
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i];
+  // "--" ends option parsing, so text such as "--compare plans" survives.
+  if (arg === "--") {
+    positional.push(...argv.slice(i + 1));
+    break;
+  }
   if (!arg.startsWith("--")) positional.push(arg);
-  else if (["--json", "--watch", "--all", "--archived", "--help"].includes(arg))
-    flags[arg.slice(2)] = true;
+  else if (BOOLEAN_FLAGS.includes(arg)) flags[arg.slice(2)] = true;
   else flags[arg.slice(2)] = argv[++i];
 }
 const json = !!flags.json;
@@ -234,6 +249,7 @@ async function login() {
       headers: { "Content-Type": "application/json", Cookie: cookie },
       body: JSON.stringify(body || {}),
     });
+  const previous = readConfig();
   try {
     const scopes = (flags.scopes || "read,chat,admin")
       .split(",")
@@ -260,8 +276,31 @@ async function login() {
       ),
       { mode: 0o600 },
     );
+    // Replace, don't orphan: revoke the token this CLI held before.
+    let replaced = null;
+    if (previous.id && previous.token && previous.id !== created.id) {
+      const res =
+        previous.url === origin
+          ? await fetch(`${origin}/api/manager-tokens/${previous.id}`, {
+              method: "DELETE",
+              redirect: "error",
+              headers: { Cookie: cookie },
+            }).catch(() => null)
+          : await revokeSelf(previous).catch(() => null);
+      replaced = res && (res.ok || [401, 404].includes(res.status));
+      if (!replaced)
+        console.error(
+          `a2ahub: could not revoke the previous token "${previous.name}". Revoke it on Settings › Headless & manager API.`,
+        );
+    }
     print(
-      { ok: true, name: created.name, scopes: created.scopes, configFile },
+      {
+        ok: true,
+        name: created.name,
+        scopes: created.scopes,
+        configFile,
+        previousRevoked: replaced,
+      },
       () =>
         console.log(
           `✓ Signed in as manager token "${created.name}" (${created.scopes.join(", ")}).\n  Saved privately to ${configFile}`,
@@ -273,14 +312,40 @@ async function login() {
   }
 }
 
+function revokeSelf(config) {
+  return fetch(`${hubOrigin(config)}/api/v1/manager-tokens/${config.id}`, {
+    method: "DELETE",
+    redirect: "error",
+    headers: { Authorization: `Bearer ${config.token}` },
+  });
+}
+
 async function logout() {
   const config = readConfig();
-  if (config.id && config.token)
-    await api(`/manager-tokens/${config.id}`, undefined, "DELETE").catch(
-      () => {},
+  if (!config.token) {
+    fs.rmSync(configFile, { force: true });
+    return print({ ok: true, revoked: false }, () =>
+      console.log("No saved token. Nothing to revoke."),
+    );
+  }
+  // Keep the only local copy until the Hub confirms revocation; 401/404
+  // mean the token is already unusable.
+  const res = await revokeSelf(config).catch(() => null);
+  const revoked = !!res && (res.ok || [401, 404].includes(res.status));
+  if (!revoked && !flags.local)
+    fail(
+      `Could not revoke "${config.name}" (${res ? `HTTP ${res.status}` : `cannot reach ${hubOrigin(config)}`}). ` +
+        `The token is still saved at ${configFile}. Retry when the Hub is reachable, ` +
+        `or run "a2ahub logout --local" and revoke it on Settings › Headless & manager API.`,
     );
   fs.rmSync(configFile, { force: true });
-  print({ ok: true }, () => console.log("✓ Token revoked and removed."));
+  print({ ok: true, revoked }, () =>
+    console.log(
+      revoked
+        ? "✓ Token revoked and removed."
+        : `Removed the saved token without revoking it. Revoke "${config.name}" on Settings › Headless & manager API.`,
+    ),
+  );
 }
 
 function printMessage(m) {
