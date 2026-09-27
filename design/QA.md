@@ -45,3 +45,33 @@ An initial cloud-browser attempt was blocked with `net::ERR_BLOCKED_BY_CLIENT`. 
 - All 16 automated tests and the production build passed after the keyboard fix; `git diff --check` passed.
 
 Live endpoint discovery confirmed LilDSweetz advertised A2A 1.0 streaming. Automatic approval review blocked the subsequent live smoke-test command, so no live model request was sent. Concurrent discussion with multiple live model agents remains unverified. The earlier single-agent verification is separate from this mock-based group-chat coverage.
+
+## Redesign: themes, folders, admin, headless (2026-09-27)
+
+Design reference: the "A2Ahub Redesign" canvas (desktop, mobile, directory, access,
+admin, headless, library, appearance and high-visibility boards). The existing
+features were kept; layout moved to an icon rail, conversation sidebar with
+folders, and a Room / Activity / Agent details panel.
+
+Verification used `node test/fixtures/ui-workflow.mjs --sessions` (mock connectors,
+disposable data) and Playwright with the preinstalled Chromium, headless, at
+1440 × 960 and 390 × 844. Screenshots and scripts were kept outside the repository.
+
+- Pages rendered: chat (idle, live burst, stopped), Activity tab, Library, bulk
+  selection bar, archived empty state, Admin, Settings appearance and API tabs,
+  Agents, Access, mobile chat, mobile drawer, mobile details and mobile Admin.
+- Themes checked visually: Ember, Midnight and High visibility with the low-vision
+  preset (130% text, Hyperlegible, roomy, thick focus). No horizontal overflow on
+  mobile chat or Admin.
+- Interactions: Stop paused the room and cleared work; Resume started no request;
+  Ctrl+K focused search; the room menu opened with focus on its first item and is
+  no longer clipped by the scrolling list; archive paused the room and restore kept
+  it paused; failed endpoint discovery showed an error, Tab stayed inside the dialog,
+  Escape closed it and focus returned to the opener; Escape closed the mobile drawer
+  and returned focus to the menu button.
+- Console: no runtime errors. The only entry was the expected 400 from the
+  deliberately unreachable endpoint.
+
+Not covered: live model agents, real multi-computer use, screen readers, and
+Windows high-contrast mode. The High contrast dark and Graphite/Evergreen themes
+were checked through their previews only.

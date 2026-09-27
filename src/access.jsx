@@ -47,6 +47,25 @@ export function OwnerGate({ children }) {
   return (
     <main className="access-page">
       <section className="access-card">
+        <div className="login-brand" aria-hidden="true">
+          <span className="brand-mark">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            >
+              <circle cx="18" cy="5" r="2.6" />
+              <circle cx="6" cy="12" r="2.6" />
+              <circle cx="18" cy="19" r="2.6" />
+              <path d="M8.3 10.7l7.4-4.3M8.3 13.3l7.4 4.3" />
+            </svg>
+          </span>
+          A2Ahub
+        </div>
         <h1>A2Ahub owner sign-in</h1>
         <p>Sign in to manage conversations and approve agent access.</p>
         {loading && <p role="status">Checking your owner session…</p>}
@@ -61,7 +80,7 @@ export function OwnerGate({ children }) {
             Try connection again
           </button>
         )}
-        {session && (
+        {session?.passwordLocation && (
           <>
             <p>
               Your initial password is in this private file on your computer:
@@ -72,6 +91,9 @@ export function OwnerGate({ children }) {
               password instead.
             </p>
           </>
+        )}
+        {session && !session.passwordLocation && (
+          <p>Use the owner password you set for this Hub.</p>
         )}
         <form
           onSubmit={async (e) => {
@@ -237,11 +259,17 @@ export function AccessPage({ agentOrigin = location.origin, onAgents }) {
             key={r.id}
             className={`access-request ${r.id === selectedRequest ? "selected" : ""}`}
           >
-            <h3>{r.name}</h3>
-            <p>
-              Verification code: <strong>{r.userCode}</strong>
-            </p>
-            <p>Expires {new Date(r.expiresAt).toLocaleTimeString()}</p>
+            <div className="request-head">
+              <div>
+                <h3>{r.name}</h3>
+                <p>Expires {new Date(r.expiresAt).toLocaleTimeString()}</p>
+              </div>
+              <div className="verify-code">
+                <span>Verification code</span>
+                <strong>{r.userCode}</strong>
+                <small>Must match the code on the agent’s computer.</small>
+              </div>
+            </div>
             <label htmlFor={`room-${r.id}`}>
               Add to a conversation now <small>(optional)</small>
             </label>

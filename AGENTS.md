@@ -8,20 +8,28 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 
 - `src/main.jsx`: chat, recipient selection, agent registration, and connection inspection.
 - `src/style.css`: responsive interface styles.
-- `src/workspace.jsx`: shared navigation, owner profile, directory, and membership picker.
+- `src/workspace.jsx`: shared navigation, directory, and membership picker.
+- `src/appearance.js`: per-browser themes and reading-comfort settings (including low-vision schemes).
+- `src/conversations.jsx`, `src/library.jsx`: sidebar folders and the Library (bulk organize, archive, restore, delete).
+- `src/admin.jsx`, `src/settings.jsx`: Hub admin page; Settings tabs for profile, appearance, manager tokens and session.
 - `server/index.js`: API, event stream, room settings, and atomic JSON persistence.
 - `server/chat.js`: concurrent group-chat workers, bounded discussion bursts, Continue, and Stop.
 - `server/protocol.js`: A2A discovery, version-specific wire formats, streaming, polling, and cancellation.
 - `test/protocol.test.js`: isolated local mock agents and integration tests.
 - `test/chat.test.js`: scheduler tests for concurrency, request limits, audience boundaries, Continue, and Stop.
-- `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access.
+- `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access, manager tokens.
+- `server/audit.js`: audit log of administrative actions.
+- `scripts/a2ahub.mjs`: manager CLI for the loopback owner API (full or headless).
 - `scripts/a2a-client.mjs`: private device-authorization client and A2A read/post helper.
 - `scripts/a2a-connect.mjs`, `server/dispatch.js`: outbound agent connector and single-claim dispatch broker.
 - `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: existing Codex conversation queue, opted-in Claude Code channel and Windows Hermes Desktop gateway attachment; private receipt journal and loopback control helper.
 - `test/workflow.test.js`, `test/dispatch.test.js`: reusable-agent, history, remote-listener, and dispatch regressions.
+- `test/admin.test.js`, `test/appearance.test.js`: headless mode, manager-token scopes, folders, archive, admin, CLI and theme logic.
 
 ## Behavioral constraints
 
+- Headless mode serves the same owner API without the frontend; it stays on loopback. Manager tokens (`a2m_`, scopes read/chat/admin) are owner-created, shown once, stored hashed, and must never authenticate agent A2A routes; agent credentials must never authorize owner APIs. Token creation, password change and session revocation require the owner session. CLI approvals must carry the verification code.
+- Archived rooms are paused and read-only (no messages, Continue, Resume or membership changes). Restore must not resume agents. Only archived, inactive rooms may be deleted. Audit entries never contain message text or secrets.
 - Keep owner login, workspace, and administrative routes bound to loopback and preserve host/origin validation. An explicitly configured separate agent listener may expose only device bootstrap, the agent card, and authenticated A2A. Never mount owner APIs or the frontend on that listener. Public multi-user hosting remains out of scope.
 - Treat approved accounts as reusable directory identities. Room membership is explicit and independent of approval; approval need not choose a room. Preserve one identity across rooms, honest approved/online/offline states, and universal navigation. Do not require endpoint details when adding an existing identity.
 - Optional initial-room approval must recheck capacity and active work when the credential is collected. Fall back to directory-only for an unavailable room, and keep reply allowance large enough for all admitted members. Owner streams must stop at logout and revalidate before every snapshot.

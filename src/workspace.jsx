@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Check,
   Copy,
+  Gauge,
   GripVertical,
+  Library,
   MessageCircle,
   Plus,
   Search,
@@ -11,6 +13,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { Avatar } from "./ui.jsx";
 
 export const AGENT_DRAG_TYPE = "application/x-a2ahub-agent";
 const harnessNames = {
@@ -19,37 +22,58 @@ const harnessNames = {
   hermes: "Hermes",
 };
 export const pages = [
-  { path: "/", title: "Conversations", icon: MessageCircle },
-  { path: "/agents", title: "Agents", icon: Users },
-  { path: "/access", title: "Access", icon: ShieldCheck },
-  { path: "/settings", title: "Settings", icon: Settings },
+  { path: "/", title: "Conversations", short: "Chats", icon: MessageCircle },
+  { path: "/library", title: "Library", short: "Library", icon: Library },
+  { path: "/agents", title: "Agents", short: "Agents", icon: Users },
+  { path: "/access", title: "Access", short: "Access", icon: ShieldCheck },
+  { path: "/admin", title: "Hub admin", short: "Admin", icon: Gauge },
+  { path: "/settings", title: "Settings", short: "Settings", icon: Settings },
 ];
 
-export function Navigation({ path, navigate }) {
+export function Navigation({
+  path,
+  navigate,
+  badges = {},
+  className = "workspace-nav",
+  only,
+}) {
   return (
-    <nav className="workspace-nav" aria-label="Workspace">
-      {pages.map(({ path: href, title, icon: Icon }) => (
-        <a
-          key={href}
-          href={href}
-          aria-current={path === href ? "page" : undefined}
-          onClick={(event) => {
-            if (
-              event.button ||
-              event.ctrlKey ||
-              event.metaKey ||
-              event.shiftKey ||
-              event.altKey
-            )
-              return;
-            event.preventDefault();
-            navigate(href);
-          }}
-        >
-          <Icon size={17} />
-          <span>{title}</span>
-        </a>
-      ))}
+    <nav className={className} aria-label="Workspace">
+      {pages
+        .filter((p) => !only || only.includes(p.path))
+        .map(({ path: href, title, short, icon: Icon }) => (
+          <a
+            key={href}
+            href={href}
+            title={title}
+            aria-label={
+              badges[href]
+                ? `${title}, ${badges[href]} need attention`
+                : undefined
+            }
+            aria-current={path === href ? "page" : undefined}
+            onClick={(event) => {
+              if (
+                event.button ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return;
+              event.preventDefault();
+              navigate(href);
+            }}
+          >
+            <Icon size={20} aria-hidden="true" />
+            <span className="nav-label">{short}</span>
+            {badges[href] > 0 && (
+              <span className="nav-badge" aria-hidden="true">
+                {badges[href]}
+              </span>
+            )}
+          </a>
+        ))}
     </nav>
   );
 }
@@ -544,10 +568,20 @@ export function AgentDirectory({
   onConversation,
 }) {
   const [query, setQuery] = useState("");
-  const visible = participants.filter((a) =>
-    `${a.name} ${a.description || ""}`
-      .toLowerCase()
-      .includes(query.toLowerCase()),
+  const [filter, setFilter] = useState("all");
+  const filters = [
+    ["all", "All", () => true],
+    ["online", "Online", (a) => connectionStatus(a) === "connected"],
+    ["offline", "Offline", (a) => connectionStatus(a) !== "connected"],
+    ["session", "Open conversations", (a) => a.receiver?.kind === "session"],
+  ];
+  const matches = filters.find(([id]) => id === filter)[2];
+  const visible = participants.filter(
+    (a) =>
+      matches(a) &&
+      `${a.name} ${a.description || ""}`
+        .toLowerCase()
+        .includes(query.toLowerCase()),
   );
   return (
     <section
@@ -585,6 +619,18 @@ export function AgentDirectory({
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
+        <div className="segmented" role="group" aria-label="Filter agents">
+          {filters.map(([id, label, fn]) => (
+            <button
+              key={id}
+              aria-pressed={filter === id}
+              onClick={() => setFilter(id)}
+            >
+              {label}{" "}
+              <span className="count">{participants.filter(fn).length}</span>
+            </button>
+          ))}
+        </div>
         <button className="outline" onClick={onConnect}>
           <Plus size={17} />
           Connect an endpoint
@@ -616,12 +662,10 @@ export function AgentDirectory({
               onDragStart={(e) => e.preventDefault()}
             >
               <div className="directory-card-heading">
-                <div className="avatar">
-                  <Users size={18} />
-                </div>
+                <Avatar name={a.name} size="lg" />
                 <div>
                   <h3>{a.name}</h3>
-                  <p>
+                  <p className={`status-line ${connectionStatus(a)}`}>
                     <i className={`dot ${connectionStatus(a)}`} />
                     {statusText(a)}
                   </p>
@@ -696,64 +740,6 @@ export function AgentDirectory({
           )}
         </div>
       )}
-    </section>
-  );
-}
-
-export function SettingsPage({ profile, onSave, onLogout, busy }) {
-  const [name, setName] = useState(profile?.displayName || "You");
-  const [notice, setNotice] = useState("");
-  useEffect(
-    () => setName(profile?.displayName || "You"),
-    [profile?.displayName],
-  );
-  return (
-    <section className="page-content settings-page">
-      <div className="settings-card">
-        <h2>Your identity</h2>
-        <p>This is the name agents see on your new messages.</p>
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setNotice("");
-            if (await onSave(name.trim()))
-              setNotice("Your display name is saved.");
-          }}
-        >
-          <label htmlFor="display-name">Display name</label>
-          <input
-            id="display-name"
-            value={name}
-            maxLength={80}
-            required
-            onChange={(e) => setName(e.target.value)}
-            autoComplete="nickname"
-          />
-          <button
-            className="primary"
-            disabled={
-              busy || !name.trim() || name.trim() === profile?.displayName
-            }
-          >
-            Save name
-          </button>
-        </form>
-        {notice && (
-          <p role="status" className="success-notice">
-            {notice}
-          </p>
-        )}
-      </div>
-      <div className="settings-card">
-        <h2>Owner session</h2>
-        <p>
-          You’re signed in as the owner of this local workspace. Agent
-          credentials are managed separately on Access.
-        </p>
-        <button className="outline" onClick={onLogout} disabled={busy}>
-          Sign out
-        </button>
-      </div>
     </section>
   );
 }

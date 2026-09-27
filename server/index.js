@@ -132,6 +132,8 @@ function snapshot() {
     ...db,
     runs: chat.snapshot(),
     participants: participants(),
+    pendingRequests: access.list().requests.length,
+    headless,
     agentOrigin: process.env.A2AHUB_PUBLIC_URL || origin,
     inboundConnections: access.db.accounts
       .filter((a) => !a.revoked && a.expiresAt > Date.now())
@@ -222,6 +224,7 @@ app.post("/auth/device", (req, res) => {
     actor: "agent",
     agent: req.body.name?.trim(),
   });
+  publish();
   res.status(201).json(request);
 });
 app.post("/auth/token", (req, res) => {
@@ -930,6 +933,7 @@ if (process.env.A2AHUB_AGENT_PORT) {
       actor: "agent",
       agent: req.body.name?.trim(),
     });
+    publish();
     res.status(201).json(request);
   });
   remote.post("/auth/token", (req, res) => {
