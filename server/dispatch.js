@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EventJournal, digestContent } from "./events.js";
 
 const terminal = new Set([
   "completed",
@@ -21,6 +22,9 @@ export class DispatchBroker {
     presenceMs = 45000,
     pollMs = 20000,
     cancelMs = 5000,
+    epoch = Date.now(),
+    journal = null,
+    onEvent = () => {},
   } = {}) {
     Object.assign(this, {
       isAuthorized,
@@ -29,13 +33,24 @@ export class DispatchBroker {
       presenceMs,
       pollMs,
       cancelMs,
+      epoch,
+      journal,
+      onEvent,
     });
     this.peers = new Map();
     this.jobs = new Map();
     this.waiters = new Map();
+    this.generationIds = new Map();
     this.closed = false;
     this.timer = setInterval(() => this.sweep(), Math.min(presenceMs, 5000));
     this.timer.unref();
+  }
+
+  journalEvent(event) {
+    if (this.journal) {
+      this.journal.append(event);
+      this.onEvent();
+    }
   }
 
   status(accountId) {
@@ -82,6 +97,45 @@ export class DispatchBroker {
         );
     }
     this.wake(accountId);
+  }
+
+  // Invalidate a room's dispatch generation so late completion reports
+  // after a global Stop are rejected.
+  invalidateGeneration(roomId) {
+    this.generationIds.set(roomId, randomUUID());
+  }
+
+  getGeneration(roomId) {
+    return this.generationIds.get(roomId) || null;
+  }
+
+  // Authenticated claim-status reconciliation: a surviving session receiver
+  // whose claim disappeared after a Hub restart can query its status.
+  // Returns { state: "interrupted" | "uncertain" | "valid" | "unknown" }.
+  reconcileClaim(accountId, dispatchId) {
+    const job = this.jobs.get(dispatchId);
+    if (!job) {
+      // The job is gone: it was interrupted by the restart.
+      return { state: "interrupted", epoch: this.epoch };
+    }
+    if (job.accountId !== accountId)
+      return { state: "unknown" };
+    if (job.state === "claimed") return { state: "valid", job };
+    if (job.state === "canceled") return { state: "interrupted", job };
+    return { state: "valid", job };
+  }
+
+  // Seal obsolete claims as interrupted and remove their pending payloads.
+  // Expose truthful readiness after reconciliation.
+  sealObsoleteClaim(accountId, dispatchId) {
+    const job = this.jobs.get(dispatchId);
+    if (job && job.accountId === accountId && job.state === "claimed") {
+      job.state = "interrupted";
+      job.finished = this.now();
+      job.cleanup();
+      job.reject(new Error("Claim interrupted by Hub restart. Remote work may continue; it was not retried."));
+      this.wake(accountId);
+    }
   }
 
   sweep() {
@@ -150,6 +204,7 @@ export class DispatchBroker {
         accountId,
         targetConnectorId: this.peers.get(accountId).connectorId,
         roomId,
+        generationId: this.getGeneration(roomId),
         prompt,
         context: { ...context, contextId },
         state: "queued",
@@ -302,6 +357,15 @@ export class DispatchBroker {
         connectorId,
         leaseId: randomUUID(),
       });
+      this.journalEvent({
+        type: "dispatch.claimed",
+        roomId: job.roomId,
+        dispatchId: job.dispatchId,
+        leaseId: job.leaseId,
+        senderId: accountId,
+        audience: [accountId],
+        payload: { connectorId },
+      });
       return {
         dispatch: {
           dispatchId: job.dispatchId,
@@ -346,11 +410,24 @@ export class DispatchBroker {
       throw new Error("Unknown dispatch or invalid claim.");
     const authorized = this.isAuthorized(account.id, job.roomId);
     if (!authorized) this.stop(job, "Agent access ended.");
+    // A sealed run (global Stop) rejects late completion reports.
+    const generation = this.getGeneration(job.roomId);
+    if (generation && job.generationId && job.generationId !== generation) {
+      return { accepted: false, sealed: true };
+    }
     if (command.kind === "canceled" && job.state === "canceled") {
       job.cancelAcknowledged = true;
       job.cancelConfirmed = command.canceled === true;
       for (const done of job.cancelWaiters || []) done(job.cancelConfirmed);
       job.cancelWaiters?.clear();
+      this.journalEvent({
+        type: "dispatch.canceled",
+        roomId: job.roomId,
+        dispatchId: job.dispatchId,
+        senderId: account.id,
+        audience: [account.id],
+        payload: { confirmed: job.cancelConfirmed },
+      });
       return { accepted: true, canceled: job.cancelConfirmed };
     }
     if (!authorized || job.state === "canceled")
@@ -376,20 +453,66 @@ export class DispatchBroker {
         state: result.state === "submitted" ? "submitted" : "working",
         taskId: job.dispatchId,
       });
+      this.journalEvent({
+        type: "dispatch.progress",
+        roomId: job.roomId,
+        dispatchId: job.dispatchId,
+        senderId: account.id,
+        audience: [account.id],
+        payload: { state: result.state },
+      });
       return { accepted: true };
     }
     if (command.kind !== "complete" && command.kind !== "error")
       throw new Error("Unknown dispatch report kind.");
     if (command.kind === "complete" && !terminal.has(result.state))
       throw new Error("A terminal result is required.");
+    // Persist scoped completion receipt with content digest for idempotency.
+    // A duplicate report returns the original receipt; a conflict fails.
+    const receiptResult = this.recordCompletion(job, result, command.kind);
+    if (receiptResult.duplicate)
+      return { accepted: true, duplicate: true, receipt: receiptResult.receipt };
+    if (receiptResult.conflict)
+      return { accepted: false, conflict: true, receipt: receiptResult.receipt };
     job.state = "done";
     job.finished = this.now();
     job.cleanup();
+    this.journalEvent({
+      type: command.kind === "error" ? "dispatch.error" : "dispatch.completed",
+      roomId: job.roomId,
+      dispatchId: job.dispatchId,
+      senderId: account.id,
+      audience: [account.id],
+      payload: { state: result.state, contextId: result.contextId },
+    });
     if (command.kind === "error")
       job.reject(new Error(result.text || "Agent connector failed."));
     else job.resolve(result);
     this.wake(account.id);
-    return { accepted: true };
+    return { accepted: true, receipt: receiptResult.receipt };
+  }
+
+  recordCompletion(job, result, kind) {
+    if (kind !== "complete") return { accepted: true, duplicate: false, conflict: false };
+    if (!job.receipts) job.receipts = new Map();
+    const dig = digestContent(result.text);
+    const existing = job.receipts.get("completion");
+    if (existing) {
+      if (existing.contentDigest === dig)
+        return { accepted: true, receipt: existing, duplicate: true, conflict: false };
+      return { accepted: false, receipt: existing, duplicate: false, conflict: true };
+    }
+    const receipt = {
+      dispatchId: job.dispatchId,
+      contentDigest: dig,
+      text: result.text,
+      state: result.state,
+      contextId: result.contextId,
+      taskId: result.taskId || null,
+      acceptedAt: new Date(this.now()).toISOString(),
+    };
+    job.receipts.set("completion", receipt);
+    return { accepted: true, receipt, duplicate: false, conflict: false };
   }
 
   close() {

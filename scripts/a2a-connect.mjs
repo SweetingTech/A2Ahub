@@ -34,8 +34,35 @@ export async function runConnector({
   redact = (text) => text,
 }) {
   let active = null,
-    failure = null;
+    failure = null,
+    reconciled = new Set();
   const seen = new Set();
+  // Bounded exponential backoff with jitter for transient transport failures.
+  // Terminal states (expired/revoked credentials, invalid configuration) exit.
+  let backoff = 0;
+  const MAX_BACKOFF = 30000;
+  const isTerminal = (error) =>
+    /expired|revoked|denied|invalid|not approved|Credential/i.test(
+      error?.message || "",
+    );
+  async function callWithRetry(command) {
+    try {
+      const result = await call(command);
+      backoff = 0;
+      return result;
+    } catch (error) {
+      if (signal?.aborted || isTerminal(error)) throw error;
+      // Transient transport failure: back off and retry.
+      backoff = Math.min(
+        backoff === 0 ? 1000 : backoff * 2,
+        MAX_BACKOFF,
+      );
+      const jitter = Math.floor(Math.random() * 500);
+      log(`Transport error, retrying in ${backoff + jitter}ms: ${error.message}`);
+      await sleep(backoff + jitter, signal);
+      return callWithRetry(command);
+    }
+  }
   async function stopRemote(work) {
     if (work.stopping) return work.stopping;
     work.controller.abort();
@@ -126,7 +153,7 @@ export async function runConnector({
   }
   try {
     while (!signal?.aborted && !failure) {
-      const result = await call({
+      const result = await callWithRetry({
         action: "next_dispatch",
         connectorId,
         available: !active,
@@ -135,7 +162,7 @@ export async function runConnector({
         const work =
           active?.dispatch.dispatchId === item.dispatchId ? active : null;
         const confirmed = work ? await stopRemote(work) : false;
-        await call({
+        await callWithRetry({
           action: "report_dispatch",
           connectorId,
           ...item,
@@ -144,6 +171,29 @@ export async function runConnector({
         });
       }
       if (signal?.aborted || failure) break;
+      // After a transport error recovery, reconcile any active claim.
+      if (active && !reconciled.has(active.dispatch.dispatchId)) {
+        reconciled.add(active.dispatch.dispatchId);
+        try {
+          const status = await callWithRetry({
+            action: "reconcile_claim",
+            dispatchId: active.dispatch.dispatchId,
+          });
+          if (status.state === "interrupted") {
+            log("Hub restarted; claim interrupted. Sealing and reporting error.");
+            await stopRemote(active);
+            await call({
+              action: "report_dispatch",
+              connectorId,
+              dispatchId: active.dispatch.dispatchId,
+              leaseId: active.dispatch.leaseId,
+              kind: "error",
+              result: { text: "Claim interrupted by Hub restart.", state: "failed" },
+            }).catch(() => {});
+            active = null;
+          }
+        } catch {}
+      }
       if (result.dispatch) start(result.dispatch);
       await sleep(
         Math.max(100, Math.min(1000, result.pollAfterMs || 250)),

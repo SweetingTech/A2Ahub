@@ -9,7 +9,7 @@ import { Role } from "@a2a-js/sdk";
 
 export function mountInbound(
   app,
-  { access, db, publish, origin, broker, onPost },
+  { access, db, publish, origin, broker, onPost, journal },
 ) {
   const card = {
     name: "A2Ahub",
@@ -48,9 +48,12 @@ export function mountInbound(
     skills: [
       "list_rooms",
       "read_messages",
+      "read_events",
+      "acknowledge_events",
       "post_message",
       "next_dispatch",
       "report_dispatch",
+      "reconcile_claim",
     ].map((id) => ({
       id,
       name: id.replaceAll("_", " "),
@@ -58,13 +61,19 @@ export function mountInbound(
         list_rooms:
           "List the conversations the owner has added you to using {action:list_rooms}.",
         read_messages:
-          "Read new shared messages using {action:read_messages,roomId:...,cursor:0}. The room must be explicitly assigned by the owner.",
+          "Read new shared messages using {action:read_messages,roomId:...,cursor:0}. The room must be explicitly assigned by the owner. Legacy: stops at the first unfinished shared reply. Use read_events for a complete event stream.",
+        read_events:
+          "Read durable room events using {action:read_events,roomId:...,cursor:0}. Returns all events after the cursor including later completed messages even while an earlier reply is still working. Use the returned next_cursor for the next read. resync_required means the cursor expired.",
+        acknowledge_events:
+          "Commit your per-recipient cursor using {action:acknowledge_events,roomId:...,cursor:...}. This records how far you have successfully processed so the Hub can report delivery progress. The cursor must be a valid event sequence from read_events.",
         post_message:
           "Post using {action:post_message,roomId:...,text:...}. A post does not grant permission for automatic model work.",
         next_dispatch:
           "Connectors poll for an authorized turn using {action:next_dispatch,connectorId:...,available:true}. When busy, poll with available:false for cancellations. No model work starts merely by polling.",
         report_dispatch:
           "Connectors report progress or a final result using {action:report_dispatch,dispatchId:...,leaseId:...,connectorId:...,kind:...,result:{text,state,contextId}}.",
+        reconcile_claim:
+          "After a Hub restart, a session receiver checks its claim status using {action:reconcile_claim,dispatchId:...}. Returns {state:valid|interrupted|uncertain|unknown} so the receiver can decide whether to seal or continue.",
       }[id],
       tags: ["chat"],
       examples: [],
@@ -120,6 +129,12 @@ export function mountInbound(
           if (!broker)
             throw new Error("Agent connector delivery is unavailable.");
           result = await broker.report(account, command);
+        } else if (command.action === "reconcile_claim") {
+          if (!broker)
+            throw new Error("Agent connector delivery is unavailable.");
+          if (typeof command.dispatchId !== "string" || !command.dispatchId)
+            throw new Error("dispatchId is required for claim reconciliation.");
+          result = broker.reconcileClaim(account.id, command.dispatchId);
         } else {
           const roomId =
             command.roomId || ctx.userMessage.contextId || account.roomId;
@@ -128,7 +143,51 @@ export function mountInbound(
           // context when a caller omits one, so do not treat that opaque
           // protocol context as a second permission boundary.
           contextId = room.id;
-          if (command.action === "read_messages") {
+          if (command.action === "read_events") {
+            if (room.archived)
+              throw new Error("Conversation is archived by the owner.");
+            const startIndex = account.bindings[room.id];
+            const cursor = command.cursor ?? 0;
+            if (!Number.isInteger(cursor) || cursor < 0)
+              throw new Error("Invalid event cursor.");
+            const memberSince = room.memberSince?.[account.id] || 0;
+            const inAudience = (e) =>
+              !e.audience ||
+              e.audience.includes(account.id) ||
+              e.senderId === account.id;
+            const evResult = journal.read(room.id, Math.max(cursor, 0), {
+              maxBatch: 200,
+            });
+            if (evResult.resyncRequired) evResult.events = [];
+            const events = evResult.events.filter(
+              (e) =>
+                e.seq > startIndex &&
+                e.seq > memberSince &&
+                inAudience(e),
+            );
+            result = {
+              context_id: room.id,
+              events: events.map((e) => ({
+                eventId: e.eventId,
+                type: e.type,
+                seq: e.seq,
+                messageId: e.messageId,
+                messageRevision: e.messageRevision,
+                senderId: e.senderId,
+                senderName: e.senderName,
+                threadId: e.threadId,
+                replyTo: e.replyTo,
+                discussionId: e.discussionId,
+                createdAt: e.createdAt,
+                payload: e.payload,
+              })),
+              next_cursor: evResult.nextCursor,
+              paused: room.paused,
+              ...(evResult.resyncRequired
+                ? { resync_required: true, oldest_seq: evResult.oldestSeq }
+                : {}),
+            };
+          } else if (command.action === "read_messages") {
             // Archived rooms are read-only for the owner and deliver nothing.
             if (room.archived)
               throw new Error("Conversation is archived by the owner.");
@@ -231,9 +290,21 @@ export function mountInbound(
               publish();
               result = { message_id: message.id, context_id: room.id };
             }
+          } else if (command.action === "acknowledge_events") {
+            if (room.archived)
+              throw new Error("Conversation is archived by the owner.");
+            const cursor = command.cursor;
+            if (!Number.isInteger(cursor) || cursor < 0)
+              throw new Error("Invalid event cursor for acknowledgment.");
+            journal.acknowledge(account.id, room.id, cursor);
+            result = {
+              context_id: room.id,
+              acknowledged: cursor,
+              previous: journal.getCursor(account.id, room.id),
+            };
           } else
             throw new Error(
-              "Unknown action. Use list_rooms, read_messages, post_message, next_dispatch or report_dispatch.",
+              "Unknown action. Use list_rooms, read_messages, read_events, acknowledge_events, post_message, next_dispatch, report_dispatch or reconcile_claim.",
             );
         }
       } catch (error) {

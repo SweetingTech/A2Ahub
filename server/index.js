@@ -9,12 +9,17 @@ import { Access } from "./access.js";
 import { mountInbound } from "./inbound.js";
 import { DispatchBroker } from "./dispatch.js";
 import { Audit } from "./audit.js";
+import { EventJournal, messageEvent } from "./events.js";
+import { buildRoomLink, parseRoomLink, MOCK_CONTRACT, mockAgentCard } from "./room-links.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.A2AHUB_DATA_DIR || path.join(root, "data");
 const version = JSON.parse(
   fs.readFileSync(path.join(root, "package.json"), "utf8"),
 ).version;
 const startedAt = Date.now();
+// Hub instance epoch: increments on each restart so surviving session receivers
+// can discover their old claims are obsolete and reconcile.
+const hubEpoch = Date.now();
 // Headless serves the same loopback owner API without the web interface.
 const headless =
   process.argv.includes("--headless") ||
@@ -85,6 +90,23 @@ function save() {
   fs.renameSync(file + ".tmp", file);
 }
 save();
+// Durable event journal: persists room events for the versioned event-cursor
+// read contract. Restored from disk on restart, empty on first run.
+const journalFile = path.join(dataDir, "events.json");
+let journal;
+if (fs.existsSync(journalFile)) {
+  try {
+    journal = EventJournal.fromJSON(JSON.parse(fs.readFileSync(journalFile, "utf8")));
+  } catch {
+    journal = new EventJournal();
+  }
+} else journal = new EventJournal();
+function saveJournal() {
+  try {
+    fs.writeFileSync(journalFile + ".tmp", JSON.stringify(journal.toJSON()));
+    fs.renameSync(journalFile + ".tmp", journalFile);
+  } catch {}
+}
 const clients = new Map();
 const access = new Access(dataDir);
 const audit = new Audit(dataDir);
@@ -97,6 +119,9 @@ const broker = new DispatchBroker({
       (r) => r.id === roomId && r.agentIds.includes(accountId) && !r.paused,
     ),
   onChange: publish,
+  epoch: hubEpoch,
+  journal,
+  onEvent: saveJournal,
 });
 const chat = new GroupChat({
   send: (agent, ...args) =>
@@ -238,8 +263,74 @@ app.post("/auth/token", (req, res) => {
 app.use("/auth", (err, req, res, next) =>
   res.status(err.status || 400).json({ error: err.message }),
 );
-const onPost = (room, message) => chat.relayPost(room, message);
-mountInbound(app, { access, db, publish, origin, broker, onPost });
+const onPost = (room, message) => {
+  journal.append(messageEvent(message, { room }));
+  saveJournal();
+  chat.relayPost(room, message);
+};
+// Authenticated SSE notification stream for agents: push-based event delivery
+// so listeners don't need to poll. Each event is sent as an SSE data frame
+// with the event type. The stream is scoped to rooms the agent can access.
+function mountSseEvents(expressApp) {
+  expressApp.get("/a2a/events", (req, res) => {
+    let account;
+    try {
+      account = access.authenticate(req.headers.authorization);
+    } catch (e) {
+      return res.status(e.status || 401).json({ error: e.message });
+    }
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.flushHeaders();
+    const unsubscribers = [];
+    for (const room of db.rooms) {
+      if (!access.canAccess(account.id, room.id) || !room.agentIds?.includes(account.id))
+        continue;
+      const inAudience = (e) =>
+        !e.audience || e.audience.includes(account.id) || e.senderId === account.id;
+      const memberSince = room.memberSince?.[account.id] || 0;
+      const startIndex = account.bindings[room.id] || 0;
+      unsubscribers.push(
+        journal.subscribe(room.id, (entry) => {
+          if (entry.seq <= startIndex || entry.seq <= memberSince || !inAudience(entry))
+            return;
+          res.write(`event: ${entry.type}\n`);
+          res.write(`data: ${JSON.stringify({
+            eventId: entry.eventId,
+            type: entry.type,
+            roomId: entry.roomId,
+            seq: entry.seq,
+            messageId: entry.messageId,
+            senderId: entry.senderId,
+            senderName: entry.senderName,
+            createdAt: entry.createdAt,
+            payload: entry.payload,
+          })}\n\n`);
+        }),
+      );
+    }
+    res.write(`event: ready\ndata: ${JSON.stringify({ account: account.id })}\n\n`);
+    const keepalive = setInterval(() => {
+      try {
+        access.authenticate(req.headers.authorization);
+        res.write(": keepalive\n\n");
+      } catch {
+        res.write("event: auth-expired\ndata: {}\n\n");
+        res.end();
+      }
+    }, 20000);
+    req.on("close", () => {
+      clearInterval(keepalive);
+      for (const unsub of unsubscribers) unsub();
+    });
+  });
+}
+mountSseEvents(app);
+mountInbound(app, { access, db, publish, origin, broker, onPost, journal });
 // Scope a manager token needs for an owner API route. Reads need "read";
 // conversation work needs "chat"; everything else (access, agents, admin,
 // profile) needs "admin". Some routes additionally require the owner session.
@@ -385,6 +476,16 @@ app.get("/api/rooms", (req, res) =>
 app.get("/api/rooms/:id", (req, res) => {
   const { contexts, ...r } = getRoom(req.params.id);
   res.json({ ...r, active: chat.active(r.id).length > 0 });
+});
+app.get("/api/rooms/:id/room-link", (req, res) => {
+  const r = getRoom(req.params.id);
+  const useMock = req.query.mock === "1";
+  res.json({
+    link: buildRoomLink(origin, r.id, { mock: useMock }),
+    mock: useMock,
+    contract: useMock ? MOCK_CONTRACT : null,
+    roomTitle: r.title,
+  });
 });
 app.get("/api/agents", (req, res) => res.json(participants()));
 app.post("/api/rooms", (req, res) => {
@@ -782,8 +883,12 @@ app.get("/api/admin/audit", (req, res) =>
   res.json(audit.list(req.query.limit)),
 );
 app.post("/api/admin/stop-all", async (req, res) => {
-  const rooms = db.rooms.filter((r) => chat.active(r.id).length);
+  // Seal ALL non-archived rooms, including settled ones with unspent allowance.
+  // Late posts, streams, and completion reports must not restart agent work.
+  const rooms = db.rooms.filter((r) => !r.archived);
   await Promise.all(rooms.map((r) => chat.stop(r)));
+  // Invalidate all dispatch generations so late completion reports are rejected.
+  for (const r of rooms) broker.invalidateGeneration(r.id);
   audit.record("admin.stop_all", { actor: actor(req), rooms: rooms.length });
   res.json({ ok: true, stopped: rooms.map((r) => r.id) });
 });
@@ -965,7 +1070,9 @@ if (process.env.A2AHUB_AGENT_PORT) {
     origin: publicUrl.origin,
     broker,
     onPost,
+    journal,
   });
+  mountSseEvents(remote);
   remote.use((req, res) =>
     res.status(404).json({ error: "Agent endpoint only." }),
   );

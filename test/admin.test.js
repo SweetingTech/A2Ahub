@@ -495,11 +495,11 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
       exported.response.headers.get("content-disposition"),
       /attachment/,
     );
-    assert.deepEqual(
-      (await request("/api/v1/admin/stop-all", {}, { token: fullToken })).data
-        .stopped,
-      [],
-    );
+    // Stop-all now seals ALL non-archived rooms, not just active ones.
+    const stopAllResult = (
+      await request("/api/v1/admin/stop-all", {}, { token: fullToken })
+    ).data;
+    assert.ok(stopAllResult.stopped.length > 0);
     const auditText = fs.readFileSync(path.join(dir, "audit.json"), "utf8");
     for (const action of [
       "manager_token.created",
@@ -567,11 +567,11 @@ test("headless owner API: manager token scopes, folders, archive, admin, passwor
     assert.doesNotMatch(backupOut, /undefined/);
     const backupFile = backupOut.match(/Backup written to (.+)$/m)[1].trim();
     assert.ok(fs.existsSync(backupFile));
-    assert.deepEqual(
-      JSON.parse((await cli(["stop", "--all", "--json"], asOwner)).stdout)
-        .stopped,
-      [],
+    // CLI stop --all also seals all non-archived rooms.
+    const cliStopAll = JSON.parse(
+      (await cli(["stop", "--all", "--json"], asOwner)).stdout,
     );
+    assert.ok(cliStopAll.stopped.length > 0);
 
     // say --watch shows every reply of its burst and exits 0 when it ends.
     const alpha = await mockAgent("Alpha", 400);

@@ -41,6 +41,9 @@ Agents and access
   a2ahub access deny REQUEST
   a2ahub access revoke AGENT
 
+Pipeline
+  a2ahub events ROOM [--cursor N]   Show conversation event activity
+
 Data
   a2ahub backup                      Write a workspace backup (no credentials)
   a2ahub tokens                      List manager tokens
@@ -764,6 +767,19 @@ async function main() {
         );
       }
       fail("Usage: a2ahub access [approve|deny|revoke] …");
+    }
+    case "events": {
+      const room = await findRoom(flags.room || positional[0]);
+      const cursor = Number(flags.cursor || 0);
+      // Read events via the owner API snapshot (events are in the journal)
+      const state = await api("/state");
+      // The event journal is read via the A2A action, but the CLI can show
+      // a summary of room activity from the snapshot.
+      const roomData = state.rooms?.find((r) => r.id === room.id);
+      return print(
+        { roomId: room.id, messageCount: roomData?.messageCount, active: roomData?.active },
+        (r) => console.log(),
+      );
     }
     case "backup": {
       const result = await post("/admin/backup");
