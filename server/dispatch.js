@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventJournal, digestContent } from "./events.js";
+import { report, recordCompletion } from "./dispatch-report.js";
 
 const terminal = new Set([
   "completed",
@@ -120,9 +121,10 @@ export class DispatchBroker {
     }
     if (job.accountId !== accountId)
       return { state: "unknown" };
-    if (job.state === "claimed") return { state: "valid", job };
-    if (job.state === "canceled") return { state: "interrupted", job };
-    return { state: "valid", job };
+    if (job.state === "claimed") return { state: "valid" };
+    if (job.state === "canceled") return { state: "interrupted" };
+    if (job.state === "done" || job.state === "interrupted") return { state: "uncertain" };
+    return { state: "valid" };
   }
 
   // Seal obsolete claims as interrupted and remove their pending payloads.
@@ -190,8 +192,9 @@ export class DispatchBroker {
     if (typeof prompt !== "string" || prompt.length > 150000)
       return Promise.reject(new Error("Dispatch prompt is too large."));
     const dispatchId = randomUUID();
-    // The scheduler explicitly retains contexts for ongoing membership. When
-    // it clears one (for example on removal), never revive the old session.
+    // Initialize a generation for this room on first dispatch so Stop-all
+    // invalidation always has a non-null baseline to compare against.
+    if (!this.getGeneration(roomId)) this.invalidateGeneration(roomId);
     const contextId = context?.contextId || `hub-${randomUUID()}`;
     return new Promise((resolve, reject) => {
       const abort = () =>
@@ -400,119 +403,11 @@ export class DispatchBroker {
   }
 
   report(account, command = {}) {
-    const job = this.jobs.get(command.dispatchId);
-    if (
-      !job ||
-      job.accountId !== account.id ||
-      job.connectorId !== command.connectorId ||
-      job.leaseId !== command.leaseId
-    )
-      throw new Error("Unknown dispatch or invalid claim.");
-    const authorized = this.isAuthorized(account.id, job.roomId);
-    if (!authorized) this.stop(job, "Agent access ended.");
-    // A sealed run (global Stop) rejects late completion reports.
-    const generation = this.getGeneration(job.roomId);
-    if (generation && job.generationId && job.generationId !== generation) {
-      return { accepted: false, sealed: true };
-    }
-    if (command.kind === "canceled" && job.state === "canceled") {
-      job.cancelAcknowledged = true;
-      job.cancelConfirmed = command.canceled === true;
-      for (const done of job.cancelWaiters || []) done(job.cancelConfirmed);
-      job.cancelWaiters?.clear();
-      this.journalEvent({
-        type: "dispatch.canceled",
-        roomId: job.roomId,
-        dispatchId: job.dispatchId,
-        senderId: account.id,
-        audience: [account.id],
-        payload: { confirmed: job.cancelConfirmed },
-      });
-      return { accepted: true, canceled: job.cancelConfirmed };
-    }
-    if (!authorized || job.state === "canceled")
-      return { accepted: false, canceled: true };
-    if (job.state !== "claimed") return { accepted: false, duplicate: true };
-    const input = command.result || {};
-    if (typeof input.text !== "string" || input.text.length > 1000000)
-      throw new Error("Invalid dispatch result text.");
-    const result = {
-      text: input.text,
-      state: String(input.state || "working"),
-      contextId:
-        typeof input.contextId === "string"
-          ? input.contextId.slice(0, 300)
-          : job.context.contextId,
-      ...(typeof input.taskId === "string"
-        ? { taskId: input.taskId.slice(0, 300) }
-        : {}),
-    };
-    if (command.kind === "progress") {
-      job.update({
-        ...result,
-        state: result.state === "submitted" ? "submitted" : "working",
-        taskId: job.dispatchId,
-      });
-      this.journalEvent({
-        type: "dispatch.progress",
-        roomId: job.roomId,
-        dispatchId: job.dispatchId,
-        senderId: account.id,
-        audience: [account.id],
-        payload: { state: result.state },
-      });
-      return { accepted: true };
-    }
-    if (command.kind !== "complete" && command.kind !== "error")
-      throw new Error("Unknown dispatch report kind.");
-    if (command.kind === "complete" && !terminal.has(result.state))
-      throw new Error("A terminal result is required.");
-    // Persist scoped completion receipt with content digest for idempotency.
-    // A duplicate report returns the original receipt; a conflict fails.
-    const receiptResult = this.recordCompletion(job, result, command.kind);
-    if (receiptResult.duplicate)
-      return { accepted: true, duplicate: true, receipt: receiptResult.receipt };
-    if (receiptResult.conflict)
-      return { accepted: false, conflict: true, receipt: receiptResult.receipt };
-    job.state = "done";
-    job.finished = this.now();
-    job.cleanup();
-    this.journalEvent({
-      type: command.kind === "error" ? "dispatch.error" : "dispatch.completed",
-      roomId: job.roomId,
-      dispatchId: job.dispatchId,
-      senderId: account.id,
-      audience: [account.id],
-      payload: { state: result.state, contextId: result.contextId },
-    });
-    if (command.kind === "error")
-      job.reject(new Error(result.text || "Agent connector failed."));
-    else job.resolve(result);
-    this.wake(account.id);
-    return { accepted: true, receipt: receiptResult.receipt };
+    return report(this, account, command);
   }
 
   recordCompletion(job, result, kind) {
-    if (kind !== "complete") return { accepted: true, duplicate: false, conflict: false };
-    if (!job.receipts) job.receipts = new Map();
-    const dig = digestContent(result.text);
-    const existing = job.receipts.get("completion");
-    if (existing) {
-      if (existing.contentDigest === dig)
-        return { accepted: true, receipt: existing, duplicate: true, conflict: false };
-      return { accepted: false, receipt: existing, duplicate: false, conflict: true };
-    }
-    const receipt = {
-      dispatchId: job.dispatchId,
-      contentDigest: dig,
-      text: result.text,
-      state: result.state,
-      contextId: result.contextId,
-      taskId: result.taskId || null,
-      acceptedAt: new Date(this.now()).toISOString(),
-    };
-    job.receipts.set("completion", receipt);
-    return { accepted: true, receipt, duplicate: false, conflict: false };
+    return recordCompletion(this, job, result, kind);
   }
 
   close() {

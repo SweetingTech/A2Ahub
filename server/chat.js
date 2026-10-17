@@ -51,7 +51,7 @@ export class GroupChat {
     }));
   }
 
-  start(room, agents, text) {
+  start(room, agents, text, options = {}) {
     const continuing = text === null;
     if (room.paused && !continuing)
       throw new Error("Agents are paused. Resume agents before sending.");
@@ -151,6 +151,12 @@ export class GroupChat {
           recipientIds: run.agentIds,
           createdAt: new Date().toISOString(),
           state: "sent",
+          ...(typeof options.threadId === "string" && options.threadId
+            ? { threadId: options.threadId.slice(0, 160) }
+            : {}),
+          ...(typeof options.inReplyTo === "string" && options.inReplyTo
+            ? { inReplyTo: options.inReplyTo.slice(0, 160) }
+            : {}),
         };
     room.messages.push(message);
     if (!continuing && room.messages.length === 1 && !room.customTitle)
@@ -256,6 +262,7 @@ export class GroupChat {
       state: "working",
       createdAt: new Date().toISOString(),
       inReplyTo: job.events[0].id,
+      threadId: job.events[0].threadId || null,
       recipientIds: run.agentIds,
       shared: run.room.agentChat,
     };

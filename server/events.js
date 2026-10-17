@@ -34,7 +34,7 @@ export function digestContent(text) {
 }
 
 export class EventJournal {
-  constructor({ now = Date.now } = {}) {
+  constructor({ now = Date.now, maxEvents } = {}) {
     this.now = now;
     this.events = [];
     this.byId = new Map();
@@ -44,7 +44,7 @@ export class EventJournal {
     this.completionReceipts = new Map();
     this.subscribers = new Map();
     this.retentionMs = RETENTION_MS;
-    this.maxEvents = MAX_EVENTS;
+    this.maxEvents = maxEvents || MAX_EVENTS;
     this.maxQueue = MAX_QUEUE;
   }
 
@@ -182,6 +182,11 @@ export class EventJournal {
   }
 
   acknowledge(accountId, roomId, cursor) {
+    if (!Number.isInteger(cursor) || cursor < 0)
+      throw new Error("Invalid acknowledgment cursor.");
+    const latest = this.latestSeq(roomId);
+    if (cursor > latest)
+      throw new Error("Acknowledgment cursor beyond latest event seq.");
     const key = `${accountId}:${roomId}`;
     const current = this.ackCursors.get(key) || 0;
     if (cursor > current) this.ackCursors.set(key, cursor);

@@ -188,7 +188,39 @@ export class SessionReceiver {
     return { accepted: true };
   }
 
+  async reconcile() {
+    for (const delivery of Object.values(this.state.deliveries)) {
+      if (!liveStates.has(delivery.state)) continue;
+      if (!delivery.dispatchId) continue;
+      try {
+        const status = await this.call({
+          action: "reconcile_claim",
+          dispatchId: delivery.dispatchId,
+        });
+        if (status.state === "interrupted") {
+          delivery.state = "interrupted";
+          delete delivery.prompt;
+          this.state.acknowledged = false;
+          this.save();
+          await this.report(delivery, {
+            kind: "error",
+            result: {
+              state: "failed",
+              text: "Claim interrupted by Hub restart. Remote work may continue; it was not retried.",
+            },
+          }).catch(() => {});
+        }
+      } catch {
+        // Transport error during reconciliation: leave delivery as-is.
+        // The next successful poll will retry.
+      }
+    }
+  }
+
   async poll() {
+    // Reconcile active deliveries on every poll cycle so a Hub restart
+    // is detected before new work is accepted.
+    await this.reconcile();
     const response = await this.call({
       action: "next_dispatch",
       connectorId: this.state.connectorId,

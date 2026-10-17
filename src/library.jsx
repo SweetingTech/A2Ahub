@@ -7,62 +7,12 @@ import {
   Pin,
   Search,
   Trash2,
-  X,
 } from "lucide-react";
 import { Dialog } from "./workspace.jsx";
-import { FOLDER_COLORS, when } from "./ui.jsx";
-import { roomState } from "./conversations.jsx";
+import { FolderDialog } from "./components/FolderDialog.jsx";
+import { BulkBar, LibraryTable } from "./components/LibraryTable.jsx";
 
-export function FolderDialog({ folder, onSave, onClose, busy, error }) {
-  const [name, setName] = useState(folder?.name || "");
-  const [color, setColor] = useState(folder?.color || "teal");
-  return (
-    <Dialog
-      title={folder ? "Edit folder" : "New folder"}
-      onClose={onClose}
-      initialFocus="#folder-name"
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSave({ name: name.trim(), color });
-        }}
-      >
-        <label htmlFor="folder-name">Folder name</label>
-        <input
-          id="folder-name"
-          value={name}
-          maxLength={40}
-          required
-          onChange={(e) => setName(e.target.value)}
-        />
-        <fieldset className="swatch-picker">
-          <legend>Color</legend>
-          {FOLDER_COLORS.map((c) => (
-            <label key={c} className={`swatch-option ${c}`}>
-              <input
-                type="radio"
-                name="folder-color"
-                value={c}
-                checked={color === c}
-                onChange={() => setColor(c)}
-              />
-              <span className="sr-only">{c}</span>
-            </label>
-          ))}
-        </fieldset>
-        {error && (
-          <p className="banner" role="alert">
-            {error}
-          </p>
-        )}
-        <button className="primary" disabled={busy || !name.trim()}>
-          {folder ? "Save folder" : "Create folder"}
-        </button>
-      </form>
-    </Dialog>
-  );
-}
+export { FolderDialog };
 
 export function LibraryPage({
   rooms,
@@ -217,227 +167,31 @@ export function LibraryPage({
           </p>
         )}
         {selected.length > 0 && (
-          <div
-            className="bulk-bar"
-            role="toolbar"
-            aria-label="Selection actions"
-          >
-            <strong>{selected.length} selected</strong>
-            {!archivedView && (
-              <>
-                <label className="bulk-move">
-                  <span className="sr-only">Move to folder</span>
-                  <select
-                    value=""
-                    disabled={busy}
-                    onChange={(e) => {
-                      const folderId =
-                        e.target.value === "none" ? null : e.target.value;
-                      bulk((r) => api(`/rooms/${r.id}`, { folderId }, "PATCH"));
-                    }}
-                  >
-                    <option value="" disabled>
-                      Move to folder…
-                    </option>
-                    {folders.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}
-                      </option>
-                    ))}
-                    <option value="none">No folder</option>
-                  </select>
-                </label>
-                <button
-                  className="outline"
-                  disabled={busy}
-                  onClick={() =>
-                    bulk((r) =>
-                      api(
-                        `/rooms/${r.id}`,
-                        { pinned: !selected.every((s) => s.pinned) },
-                        "PATCH",
-                      ),
-                    )
-                  }
-                >
-                  <Pin size={14} />
-                  {selected.every((s) => s.pinned) ? "Unpin" : "Pin"}
-                </button>
-                <button
-                  className="primary"
-                  disabled={
-                    busy || selected.some((r) => roomState(r, runs) === "live")
-                  }
-                  title={
-                    selected.some((r) => roomState(r, runs) === "live")
-                      ? "Stop active agents before archiving"
-                      : undefined
-                  }
-                  onClick={() => bulk((r) => api(`/rooms/${r.id}/archive`))}
-                >
-                  <Archive size={14} />
-                  Archive {selected.length}
-                </button>
-              </>
-            )}
-            {archivedView && (
-              <>
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => bulk((r) => api(`/rooms/${r.id}/unarchive`))}
-                >
-                  Restore {selected.length}
-                </button>
-                <button
-                  className="outline danger"
-                  disabled={busy}
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  <Trash2 size={14} />
-                  Delete permanently…
-                </button>
-              </>
-            )}
-            <button
-              className="icon"
-              aria-label="Clear selection"
-              onClick={() => setPicked([])}
-            >
-              <X size={16} />
-            </button>
-          </div>
+          <BulkBar
+            selected={selected}
+            archivedView={archivedView}
+            busy={busy}
+            folders={folders}
+            runs={runs}
+            bulk={bulk}
+            api={api}
+            setPicked={setPicked}
+            setConfirmDelete={setConfirmDelete}
+          />
         )}
-        <div className="table-wrap">
-          <table className="library-table">
-            <thead>
-              <tr>
-                <th scope="col" className="check-col">
-                  <input
-                    type="checkbox"
-                    aria-label="Select all shown conversations"
-                    checked={!!shown.length && selected.length === shown.length}
-                    onChange={(e) =>
-                      setPicked(e.target.checked ? shown.map((r) => r.id) : [])
-                    }
-                  />
-                </th>
-                <th scope="col">Conversation</th>
-                <th scope="col">Folder</th>
-                <th scope="col" className="num-col">
-                  Agents
-                </th>
-                <th scope="col">
-                  {archivedView ? "Archived" : "Last activity"}
-                </th>
-                <th scope="col">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((r) => {
-                const state = roomState(r, runs);
-                const folder = folders.find((f) => f.id === r.folderId);
-                return (
-                  <tr
-                    key={r.id}
-                    className={picked.includes(r.id) ? "picked" : ""}
-                  >
-                    <td className="check-col">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${r.title}`}
-                        checked={picked.includes(r.id)}
-                        onChange={(e) =>
-                          setPicked((old) =>
-                            e.target.checked
-                              ? [...old, r.id]
-                              : old.filter((id) => id !== r.id),
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <button
-                        className="link-button"
-                        onClick={() => onOpen(r.id)}
-                      >
-                        {r.title}
-                      </button>
-                      {r.pinned && (
-                        <Pin
-                          size={12}
-                          className="room-pin"
-                          aria-label="Pinned"
-                        />
-                      )}
-                      {state === "live" && (
-                        <span className="pill pill-info">live</span>
-                      )}
-                      {state === "paused" && !r.archived && (
-                        <span className="pill pill-warn">paused</span>
-                      )}
-                    </td>
-                    <td>
-                      {folder ? (
-                        <span className="folder-cell">
-                          <span
-                            className={`folder-swatch ${folder.color}`}
-                            aria-hidden="true"
-                          />
-                          {folder.name}
-                        </span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num-col">{r.agentIds.length}</td>
-                    <td>
-                      {when(
-                        archivedView
-                          ? r.archivedAt
-                          : r.messages.at(-1)?.createdAt || r.createdAt,
-                      )}
-                    </td>
-                    <td className="row-actions">
-                      {r.archived ? (
-                        <button
-                          className="outline small"
-                          disabled={busy}
-                          onClick={() =>
-                            act(() => api(`/rooms/${r.id}/unarchive`))
-                          }
-                        >
-                          Restore
-                        </button>
-                      ) : (
-                        <button
-                          className="outline small"
-                          disabled={busy || state === "live"}
-                          onClick={() =>
-                            act(() => api(`/rooms/${r.id}/archive`))
-                          }
-                        >
-                          Archive
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {!shown.length && (
-            <p className="library-empty">
-              {archivedView
-                ? "Nothing archived. Archive a settled conversation to tidy your sidebar."
-                : query
-                  ? "No conversations match."
-                  : "No conversations here yet."}
-            </p>
-          )}
-        </div>
+        <LibraryTable
+          shown={shown}
+          picked={picked}
+          setPicked={setPicked}
+          folders={folders}
+          runs={runs}
+          archivedView={archivedView}
+          busy={busy}
+          onOpen={onOpen}
+          api={api}
+          act={act}
+          query={query}
+        />
       </div>
       {folderDialog && (
         <FolderDialog

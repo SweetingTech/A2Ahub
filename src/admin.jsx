@@ -6,68 +6,14 @@ import {
   HardDrive,
   KeyRound,
   RefreshCw,
-  Server,
   ShieldCheck,
   Square,
   Users,
 } from "lucide-react";
 import { Dialog } from "./workspace.jsx";
 import { BurstMeter } from "./ui.jsx";
-
-const actionText = {
-  "owner.login": "Signed in",
-  "owner.logout": "Signed out",
-  "owner.password_changed": "Changed the owner password",
-  "owner.sessions_revoked": "Signed out other owner sessions",
-  "access.requested": "Requested access",
-  "access.approved": "Approved access",
-  "access.denied": "Denied access",
-  "access.revoked": "Revoked access",
-  "agent.added": "Connected an endpoint",
-  "agent.removed": "Removed an endpoint",
-  "room.archived": "Archived",
-  "room.restored": "Restored",
-  "room.deleted": "Deleted",
-  "room.stopped": "Stopped agents in",
-  "room.continued": "Continued",
-  "room.message": "Sent a message to",
-  "admin.stop_all": "Stopped all agents",
-  "admin.backup": "Backed up the workspace",
-  "admin.export": "Exported the workspace",
-  "manager_token.created": "Created manager token",
-  "manager_token.revoked": "Revoked manager token",
-};
-function describe(entry) {
-  const who =
-    entry.actor === "owner"
-      ? "You"
-      : entry.actor === "agent"
-        ? entry.agent || "An agent"
-        : entry.actor.replace(/^token:/, "Token ");
-  const subject =
-    entry.action === "access.requested"
-      ? ""
-      : entry.room || entry.agent || entry.token || "";
-  return `${who} · ${(actionText[entry.action] || entry.action).toLowerCase()}${subject ? ` ${subject}` : ""}`;
-}
-function uptime(seconds) {
-  const d = Math.floor(seconds / 86400),
-    h = Math.floor((seconds % 86400) / 3600),
-    m = Math.floor((seconds % 3600) / 60);
-  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
-}
-function bytes(n) {
-  return n > 1048576
-    ? `${(n / 1048576).toFixed(1)} MB`
-    : `${Math.max(1, Math.round(n / 1024))} KB`;
-}
-const stamp = (iso) =>
-  new Date(iso).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+import { describe, uptime, bytes, stamp } from "./components/adminHelpers.js";
+import { PasswordDialog } from "./components/PasswordDialog.jsx";
 
 export function AdminPage({ api, refreshKey, navigate, openRoom }) {
   const [info, setInfo] = useState(null);
@@ -466,82 +412,5 @@ export function AdminPage({ api, refreshKey, navigate, openRoom }) {
         />
       )}
     </section>
-  );
-}
-
-function PasswordDialog({ api, onClose, onDone }) {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const mismatch = confirm && next !== confirm;
-  return (
-    <Dialog
-      title="Change owner password"
-      onClose={onClose}
-      initialFocus="#current-password"
-    >
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setBusy(true);
-          setError("");
-          try {
-            await api("/admin/password", { current, next });
-            onDone();
-          } catch (err) {
-            setError(err.message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <label htmlFor="current-password">Current password</label>
-        <input
-          id="current-password"
-          type="password"
-          autoComplete="current-password"
-          required
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-        />
-        <label htmlFor="new-password">
-          New password <small>(12 characters or more)</small>
-        </label>
-        <input
-          id="new-password"
-          type="password"
-          autoComplete="new-password"
-          minLength={12}
-          maxLength={256}
-          required
-          value={next}
-          onChange={(e) => setNext(e.target.value)}
-        />
-        <label htmlFor="confirm-password">Confirm new password</label>
-        <input
-          id="confirm-password"
-          type="password"
-          autoComplete="new-password"
-          required
-          aria-invalid={mismatch ? "true" : undefined}
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-        />
-        {mismatch && <p className="warning">The new passwords don’t match.</p>}
-        {error && (
-          <p className="banner" role="alert">
-            {error}
-          </p>
-        )}
-        <button
-          className="primary"
-          disabled={busy || next.length < 12 || next !== confirm}
-        >
-          {busy ? "Saving…" : "Change password"}
-        </button>
-      </form>
-    </Dialog>
   );
 }

@@ -67,7 +67,7 @@ export function mountInbound(
         acknowledge_events:
           "Commit your per-recipient cursor using {action:acknowledge_events,roomId:...,cursor:...}. This records how far you have successfully processed so the Hub can report delivery progress. The cursor must be a valid event sequence from read_events.",
         post_message:
-          "Post using {action:post_message,roomId:...,text:...}. A post does not grant permission for automatic model work.",
+          "Post using {action:post_message,roomId:...,text:...}. Optional: threadId to group messages into a thread, inReplyTo to reference the message ID being answered. A post does not grant permission for automatic model work.",
         next_dispatch:
           "Connectors poll for an authorized turn using {action:next_dispatch,connectorId:...,available:true}. When busy, poll with available:false for cancellations. No model work starts merely by polling.",
         report_dispatch:
@@ -284,6 +284,12 @@ export function mountInbound(
                 inboundAccountId: account.id,
                 clientMessageId: ctx.userMessage.messageId,
                 createdAt: new Date().toISOString(),
+                ...(typeof command.threadId === "string" && command.threadId
+                  ? { threadId: command.threadId.slice(0, 160) }
+                  : {}),
+                ...(typeof command.inReplyTo === "string" && command.inReplyTo
+                  ? { inReplyTo: command.inReplyTo.slice(0, 160) }
+                  : {}),
               };
               room.messages.push(message);
               onPost?.(room, message);

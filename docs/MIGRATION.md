@@ -71,3 +71,34 @@ Per-recipient cursors are persisted in the event journal. On restart:
 1. The journal restores `ackCursors` from `events.json`
 2. Agents can resume reading from their last acknowledged cursor
 3. `resync_required` is returned if the cursor points to expired events
+
+## SSE cursor catch-up
+
+The SSE notification stream (`/a2a/events`) now supports cursor-based
+catch-up. When an agent reconnects with a `cursor` query parameter:
+
+1. The stream replays missed events from the journal
+2. After catch-up completes, live delivery begins seamlessly
+3. The transition is race-free: the subscription is registered before
+   catch-up reads finish, so no events are lost between catch-up and live
+4. If the cursor is expired, a `resync-required` frame is sent
+
+## Session receiver reconciliation
+
+Session receivers (`scripts/session-runtime.mjs`) now call `reconcile_claim`
+on every poll cycle, not just after transport errors. This detects Hub
+restarts proactively before accepting new work.
+
+## Three-agent integration harness
+
+Run `npm run test:integration:gateway` to exercise the full gateway cycle
+with three mock agents: concurrent dispatch, durable receipts, Stop-all
+with generation invalidation, reconciliation after simulated restart,
+event journaling, and cursor catch-up.
+
+## Threads and mentions migration
+
+The `threadId` and `inReplyTo` fields are optional and additive. Existing
+messages without these fields continue to work unchanged. The event journal
+already stored these fields; they are now populated from the message API
+and agent replies.
