@@ -76,7 +76,14 @@ manual participation, credential storage, and troubleshooting.
 
 Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a background server launched with the absolute path to this project's `server/index.js`; it refuses to terminate an unrelated or unidentifiable process. Only one server can listen on the configured port.
 
-`npm run dev` uses Vite middleware for development. `npm run build` produces the production frontend. `npm test` runs local mock-agent integration tests with no model calls.
+`npm run dev` uses Vite middleware for development. `npm run build` produces the production frontend. `npm test` runs every unit and component test under `test/` (including nested folders) with local mock agents and no model calls. `npm run test:integration:gateway` starts a real disposable Hub process, three mock A2A agents, the production connector and session receiver, and real HTTP and event-stream clients. `npm run check:structure` enforces the 300-line target and 500-line ceiling on handwritten code, styles and documentation.
+
+## Documentation
+
+- [Agent setup and the A2A contract](docs/AGENT-ACCESS.md): approval, event reads, acknowledgments, the version 2 event stream, receipts and existing-conversation receivers.
+- [Migration guide](docs/MIGRATION.md): setup, data upgrades and the event-stream version change.
+- [Continuous integration](docs/CI.md): what the GitHub checks run.
+- [Visual QA notes](design/QA.md): design verification history.
 
 ## Use
 
@@ -239,8 +246,8 @@ Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat
 - `scripts/a2a-connect.mjs`: runs on an agent's computer to connect its native A2A endpoint.
 - `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: exact existing-conversation receivers and correlated read/reply receipts.
 - `src/workspace.jsx`: shared navigation, owner identity, and reusable agent directory.
-- `test/`: protocol fixtures and server integration tests.
+- `test/`: unit tests; `test/component/` in-process gateway component tests; `test/integration/` the real-process gateway acceptance suite.
 - `design/`: original concept, reference screenshots, and visual verification notes.
 - `AGENTS.md`: repository guidance for coding agents.
 
-Before submitting changes, run `npm test` and `npm run build`. For UI changes, also verify the rendered desktop and mobile workflows. Keep credentials, real conversations, and generated runtime data out of commits.
+Before submitting changes, run `npm run check:structure`, `npm test`, `npm run test:integration:gateway` and `npm run build`. For UI changes, also verify the rendered desktop and mobile workflows. Keep credentials, real conversations, and generated runtime data out of commits.

@@ -7,7 +7,7 @@ This file applies throughout the repository. Read `README.md` before making chan
 A2Ahub is a single-user, local A2A chat client and conversation coordinator. The frontend is React with Vite; the backend is Node.js ES modules with Express. Use Node.js 22 or newer and npm with the committed lockfile.
 
 - `src/main.jsx`: chat, recipient selection, agent registration, and connection inspection.
-- `src/style.css`: responsive interface styles.
+- `src/style.css`: ordered stylesheet index; `src/styles/` holds themes, layout and responsive modules (later imports override earlier ones).
 - `src/workspace.jsx`: shared navigation, directory, and membership picker.
 - `src/appearance.js`: per-browser themes and reading-comfort settings (including low-vision schemes).
 - `src/conversations.jsx`, `src/library.jsx`: sidebar folders and the Library (bulk organize, archive, restore, delete).
@@ -66,6 +66,8 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 npm ci
 npm run dev
 npm test
+npm run check:structure
+npm run test:integration:gateway
 npm run build
 ```
 

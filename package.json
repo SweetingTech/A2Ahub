@@ -12,9 +12,10 @@
     "start": "node server/index.js",
     "start:headless": "node server/index.js --headless",
     "cli": "node scripts/a2ahub.mjs",
-    "test": "node --test test/*.test.js",
+    "test": "node --test \"test/**/*.test.js\"",
     "check:structure": "node scripts/check-structure.mjs",
-    "test:integration:gateway": "node test/gateway-integration.mjs"
+    "test:component:gateway": "node --test test/component/gateway-component.test.js",
+    "test:integration:gateway": "node test/integration/gateway-real.mjs"
   },
   "dependencies": {
     "@a2a-js/sdk": "^1.2.0",

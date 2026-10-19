@@ -95,7 +95,9 @@ export class SessionReceiver {
             state: "failed",
             text: "Could not confirm delivery to the existing conversation. It was not retried.",
           },
-        }).catch(() => {});
+        }).catch((error) =>
+          this.log(`Could not report unconfirmed delivery: ${error.message}`),
+        );
       }
       throw new Error(
         "Conversation delivery could not be confirmed; it was not retried.",
@@ -208,11 +210,13 @@ export class SessionReceiver {
               state: "failed",
               text: "Claim interrupted by Hub restart. Remote work may continue; it was not retried.",
             },
-          }).catch(() => {});
+          }).catch((error) =>
+            this.log(`Could not report interrupted claim: ${error.message}`),
+          );
         }
-      } catch {
-        // Transport error during reconciliation: leave delivery as-is.
-        // The next successful poll will retry.
+      } catch (error) {
+        // Leave the delivery as-is; the next successful poll reconciles again.
+        this.log(`Claim reconciliation failed: ${error.message}`);
       }
     }
   }

@@ -6,10 +6,12 @@ import {
 } from "@a2a-js/sdk/server";
 import { agentCardHandler, jsonRpcHandler } from "@a2a-js/sdk/server/express";
 import { Role } from "@a2a-js/sdk";
+import { parseCursor } from "./events.js";
+import { publicEvent } from "./event-access.js";
 
 export function mountInbound(
   app,
-  { access, db, publish, origin, broker, onPost, journal },
+  { access, db, publish, origin, broker, onPost, journal, gate },
 ) {
   const card = {
     name: "A2Ahub",
@@ -144,44 +146,32 @@ export function mountInbound(
           // protocol context as a second permission boundary.
           contextId = room.id;
           if (command.action === "read_events") {
-            if (room.archived)
-              throw new Error("Conversation is archived by the owner.");
-            const startIndex = account.bindings[room.id];
-            const cursor = command.cursor ?? 0;
-            if (!Number.isInteger(cursor) || cursor < 0)
-              throw new Error("Invalid event cursor.");
-            const memberSince = room.memberSince?.[account.id] || 0;
-            const inAudience = (e) =>
-              !e.audience ||
-              e.audience.includes(account.id) ||
-              e.senderId === account.id;
-            const evResult = journal.read(room.id, Math.max(cursor, 0), {
+            const { grant } = gate.authorize(
+              ctx.context.user.authorization,
+              room.id,
+            );
+            const requested = parseCursor(command.cursor, { fallback: NaN });
+            if (Number.isNaN(requested)) throw new Error("Invalid event cursor.");
+            const start = gate.startCursor(requested, grant);
+            const evResult = journal.read(room.id, start, {
               maxBatch: 200,
+              until: journal.latestSeq(room.id),
             });
-            if (evResult.resyncRequired) evResult.events = [];
-            const events = evResult.events.filter(
-              (e) =>
-                e.seq > startIndex &&
-                e.seq > memberSince &&
-                inAudience(e),
+            const events = evResult.events.filter((e) =>
+              gate.visible(e, account.id, grant),
             );
             result = {
               context_id: room.id,
-              events: events.map((e) => ({
-                eventId: e.eventId,
-                type: e.type,
-                seq: e.seq,
-                messageId: e.messageId,
-                messageRevision: e.messageRevision,
-                senderId: e.senderId,
-                senderName: e.senderName,
-                threadId: e.threadId,
-                replyTo: e.replyTo,
-                discussionId: e.discussionId,
-                createdAt: e.createdAt,
-                payload: e.payload,
-              })),
+              events: events.map(publicEvent),
               next_cursor: evResult.nextCursor,
+              latest_seq: evResult.latestSeq,
+              more: !!evResult.more,
+              incarnation: grant.incarnation,
+              acknowledged: journal.getCursor(
+                account.id,
+                room.id,
+                grant.incarnation,
+              ),
               paused: room.paused,
               ...(evResult.resyncRequired
                 ? { resync_required: true, oldest_seq: evResult.oldestSeq }
@@ -297,16 +287,23 @@ export function mountInbound(
               result = { message_id: message.id, context_id: room.id };
             }
           } else if (command.action === "acknowledge_events") {
-            if (room.archived)
-              throw new Error("Conversation is archived by the owner.");
-            const cursor = command.cursor;
-            if (!Number.isInteger(cursor) || cursor < 0)
+            const { grant } = gate.authorize(
+              ctx.context.user.authorization,
+              room.id,
+            );
+            if (!Number.isSafeInteger(command.cursor) || command.cursor < 0)
               throw new Error("Invalid event cursor for acknowledgment.");
-            journal.acknowledge(account.id, room.id, cursor);
+            const ack = journal.acknowledge(
+              account.id,
+              room.id,
+              grant.incarnation,
+              command.cursor,
+            );
             result = {
               context_id: room.id,
-              acknowledged: cursor,
-              previous: journal.getCursor(account.id, room.id),
+              acknowledged: ack.acknowledged,
+              previous: ack.previous,
+              incarnation: grant.incarnation,
             };
           } else
             throw new Error(

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // a2a-simulate.mjs — local mock agent simulator for testing the reliable
 // gateway pipeline. Starts a mock A2A endpoint, connects through the Hub,
-// and exercises read_events, acknowledge_events, SSE stream, and dispatch.
+// and exercises read_events, acknowledge_events, and dispatch.
 //
 // Usage: node scripts/a2a-simulate.mjs --url http://127.0.0.1:4317
 // Requires a running Hub. Creates a disposable mock agent endpoint on a
@@ -24,7 +24,6 @@ Starts a mock A2A agent endpoint, registers it with the Hub, and exercises:
   1. Agent card discovery
   2. read_events from the event journal
   3. acknowledge_events cursor commit
-  4. SSE notification stream (/a2a/events)
   5. Dispatch claim, progress, and completion
   6. reconcile_claim after simulated restart
 

@@ -1,0 +1,126 @@
+/* App frame and navigation rail. */
+/* ---------- App frame ---------- */
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--sidebar-w) minmax(0, 1fr) var(
+      --details-w
+    );
+  height: 100dvh;
+  min-height: 560px;
+  background: var(--bg);
+}
+.app.managed-page {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+}
+.managed-page > .sidebar:not(.open) {
+  display: none;
+}
+.managed-page > .details:not(.inspect-open) {
+  display: none;
+}
+
+/* Rail */
+.rail {
+  background: var(--rail);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.9rem 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+.brand-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 12px;
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.rail > .brand-mark {
+  margin-bottom: 0.9rem;
+}
+.brand-mark.large {
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 20px;
+}
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  align-items: center;
+}
+.rail-nav a,
+.tabbar a {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  width: 62px;
+  padding: 0.55rem 0 0.45rem;
+  border-radius: 12px;
+  color: var(--rail-fg);
+  text-decoration: none;
+  font-size: 0.6875rem;
+  font-weight: 550;
+}
+.rail-nav a:hover {
+  color: var(--rail-active-fg);
+  background: color-mix(in srgb, var(--rail-active-bg) 60%, transparent);
+}
+.rail-nav a[aria-current="page"] {
+  background: var(--rail-active-bg);
+  color: var(--rail-active-fg);
+}
+.nav-badge {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.6rem;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 0.625rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rail-spacer {
+  flex: 1;
+}
+.rail-button {
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--rail-fg);
+}
+.rail-button:hover {
+  color: var(--rail-active-fg);
+  background: var(--rail-active-bg);
+}
+.rail-avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-top: 0.4rem;
+  border-radius: 50%;
+  border: 2px solid var(--rail-active-bg);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.tabbar {
+  display: none;
+}

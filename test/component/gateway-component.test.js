@@ -1,12 +1,12 @@
-#!/usr/bin/env node
-// Gateway integration harness: three mock agents exercising the full
-// dispatch → delivery → receipt → reconciliation → Stop-all cycle.
-// Run with: npm run test:integration:gateway
+// Component tests (in-process, no HTTP): broker, chat and journal wiring for
+// dispatch, receipts, reconciliation and Stop-all. Real-transport acceptance
+// lives in test/integration/gateway-real.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EventJournal, messageEvent } from "../server/events.js";
-import { DispatchBroker } from "../server/dispatch.js";
-import { GroupChat } from "../server/chat.js";
+import { EventJournal } from "../../server/events.js";
+import { messageEvent } from "../../server/event-sync.js";
+import { DispatchBroker } from "../../server/dispatch.js";
+import { GroupChat } from "../../server/chat.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -55,13 +55,16 @@ function setupThreeAgents(broker) {
 }
 
 async function pollAgent(broker, agentId, connectorId, roomId) {
-  return broker.next(
-    { id: agentId },
-    { connectorId, roomId, waitMs: 0 },
-  );
+  return broker.next({ id: agentId }, { connectorId, roomId, waitMs: 0 });
 }
 
-function completeDispatch(broker, agentId, connectorId, dispatch, text = "reply") {
+function completeDispatch(
+  broker,
+  agentId,
+  connectorId,
+  dispatch,
+  text = "reply",
+) {
   return broker.report(
     { id: agentId },
     {
@@ -178,7 +181,12 @@ test("Gateway: Stop-all invalidates all three agents; new generation works", asy
     for (const c of cancelPoll.cancellations) {
       broker.report(
         { id: a.id },
-        { ...c, connectorId: connectors[a.id], kind: "canceled", canceled: true },
+        {
+          ...c,
+          connectorId: connectors[a.id],
+          kind: "canceled",
+          canceled: true,
+        },
       );
     }
   }
@@ -206,7 +214,10 @@ test("Gateway: Stop-all invalidates all three agents; new generation works", asy
   }
   for (const a of agents) {
     const poll = await pollAgent(broker, a.id, connectors[a.id], roomId);
-    assert.ok(poll.dispatch, `${a.name} must receive new dispatch after resume`);
+    assert.ok(
+      poll.dispatch,
+      `${a.name} must receive new dispatch after resume`,
+    );
   }
 
   broker.close();
@@ -251,7 +262,10 @@ test("Gateway: reconciliation after simulated Hub restart", async () => {
 
   // Reconcile: all three claims should be "interrupted" (jobs gone)
   for (let i = 0; i < agents.length; i++) {
-    const status = broker2.reconcileClaim(agents[i].id, polls[i].dispatch.dispatchId);
+    const status = broker2.reconcileClaim(
+      agents[i].id,
+      polls[i].dispatch.dispatchId,
+    );
     assert.equal(
       status.state,
       "interrupted",
@@ -280,12 +294,21 @@ test("Gateway: event journal records all dispatch lifecycle events", async () =>
   // Claim and complete
   for (const a of agents) {
     const poll = await pollAgent(broker, a.id, connectors[a.id], roomId);
-    completeDispatch(broker, a.id, connectors[a.id], poll.dispatch, `${a.name} done`);
+    completeDispatch(
+      broker,
+      a.id,
+      connectors[a.id],
+      poll.dispatch,
+      `${a.name} done`,
+    );
   }
 
   // Journal should have events for all three dispatches
   const allEvents = journal.read(roomId, 0).events;
-  assert.ok(allEvents.length >= 6, "At least 6 lifecycle events (3 claimed + 3 completed)");
+  assert.ok(
+    allEvents.length >= 6,
+    "At least 6 lifecycle events (3 claimed + 3 completed)",
+  );
 
   // Verify event types
   const claimed = allEvents.filter((e) => e.type === "dispatch.claimed");
@@ -306,8 +329,19 @@ test("Gateway: cursor catch-up delivers missed events after reconnection", async
   broker
     .send(agents[0], "First message", {}, makeSignal(), () => {}, { roomId })
     .catch(() => {});
-  const poll1 = await pollAgent(broker, agents[0].id, connectors[agents[0].id], roomId);
-  completeDispatch(broker, agents[0].id, connectors[agents[0].id], poll1.dispatch, "First reply");
+  const poll1 = await pollAgent(
+    broker,
+    agents[0].id,
+    connectors[agents[0].id],
+    roomId,
+  );
+  completeDispatch(
+    broker,
+    agents[0].id,
+    connectors[agents[0].id],
+    poll1.dispatch,
+    "First reply",
+  );
 
   // Record cursor after first batch
   const cursorAfterFirst = journal.latestSeq(roomId);
@@ -316,8 +350,19 @@ test("Gateway: cursor catch-up delivers missed events after reconnection", async
   broker
     .send(agents[1], "Second message", {}, makeSignal(), () => {}, { roomId })
     .catch(() => {});
-  const poll2 = await pollAgent(broker, agents[1].id, connectors[agents[1].id], roomId);
-  completeDispatch(broker, agents[1].id, connectors[agents[1].id], poll2.dispatch, "Second reply");
+  const poll2 = await pollAgent(
+    broker,
+    agents[1].id,
+    connectors[agents[1].id],
+    roomId,
+  );
+  completeDispatch(
+    broker,
+    agents[1].id,
+    connectors[agents[1].id],
+    poll2.dispatch,
+    "Second reply",
+  );
 
   // Reconnect with old cursor: should get only events after cursor
   const catchUp = journal.read(roomId, cursorAfterFirst);

@@ -1,0 +1,137 @@
+/* High-visibility and low-vision color schemes. */
+/* High visibility: black on white (21:1), 2px borders, bold status. */
+[data-theme="hivis"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --surface-3: #eeeeee;
+  --rail: #000000;
+  --rail-fg: #ffffff;
+  --rail-active-bg: #ffffff;
+  --rail-active-fg: #000000;
+  --text: #000000;
+  --text-2: #000000;
+  --muted: #2f2f2f;
+  --line: #000000;
+  --line-strong: #000000;
+  --accent: #0b3d91;
+  --accent-hover: #062a66;
+  --accent-fg: #ffffff;
+  --accent-soft: #e3ebf8;
+  --accent-ink: #0b3d91;
+  --danger: #a50e0e;
+  --danger-soft: #ffffff;
+  --danger-line: #a50e0e;
+  --danger-ink: #a50e0e;
+  --ok: #1a5e1a;
+  --ok-soft: #ffffff;
+  --ok-ink: #1a5e1a;
+  --warn: #7a4a00;
+  --warn-soft: #ffffff;
+  --warn-ink: #7a4a00;
+  --info: #0b3d91;
+  --info-soft: #ffffff;
+  --info-ink: #0b3d91;
+  --info-bg: #ffffff;
+  --bubble-user: #000000;
+  --bubble-user-fg: #ffffff;
+  --bubble-agent: #ffffff;
+  --bubble-agent-fg: #000000;
+  --focus: #0b3d91;
+  --border-w: 2px;
+  --shadow: none;
+  --shadow-pop: 0 0 0 3px #000000;
+  --backdrop: rgb(0 0 0 / 70%);
+  --tone-1-bg: #000000;
+  --tone-1-fg: #ffffff;
+  --tone-2-bg: #000000;
+  --tone-2-fg: #ffffff;
+  --tone-3-bg: #000000;
+  --tone-3-fg: #ffffff;
+  --tone-4-bg: #000000;
+  --tone-4-fg: #ffffff;
+  --tone-5-bg: #000000;
+  --tone-5-fg: #ffffff;
+  --tone-6-bg: #000000;
+  --tone-6-fg: #ffffff;
+}
+
+[data-theme="hcdark"] {
+  --bg: #000000;
+  --surface: #000000;
+  --surface-2: #000000;
+  --surface-3: #1c1c1c;
+  --rail: #000000;
+  --rail-fg: #ffffff;
+  --rail-active-bg: #ffd60a;
+  --rail-active-fg: #000000;
+  --text: #ffffff;
+  --text-2: #ffffff;
+  --muted: #d6d6d6;
+  --line: #ffffff;
+  --line-strong: #ffffff;
+  --accent: #ffd60a;
+  --accent-hover: #ffe45c;
+  --accent-fg: #000000;
+  --accent-soft: #2b2600;
+  --accent-ink: #ffd60a;
+  --danger: #ff7b7b;
+  --danger-soft: #000000;
+  --danger-line: #ff7b7b;
+  --danger-ink: #ff9d9d;
+  --ok: #7dff9b;
+  --ok-soft: #000000;
+  --ok-ink: #7dff9b;
+  --warn: #ffd60a;
+  --warn-soft: #000000;
+  --warn-ink: #ffd60a;
+  --info: #9cc2ff;
+  --info-soft: #000000;
+  --info-ink: #9cc2ff;
+  --info-bg: #000000;
+  --bubble-user: #ffffff;
+  --bubble-user-fg: #000000;
+  --bubble-agent: #000000;
+  --bubble-agent-fg: #ffffff;
+  --focus: #ffd60a;
+  --border-w: 2px;
+  --shadow: none;
+  --shadow-pop: 0 0 0 3px #ffffff;
+  --backdrop: rgb(0 0 0 / 80%);
+  --tone-1-bg: #ffffff;
+  --tone-1-fg: #000000;
+  --tone-2-bg: #ffffff;
+  --tone-2-fg: #000000;
+  --tone-3-bg: #ffffff;
+  --tone-3-fg: #000000;
+  --tone-4-bg: #ffffff;
+  --tone-4-fg: #000000;
+  --tone-5-bg: #ffffff;
+  --tone-5-fg: #000000;
+  --tone-6-bg: #ffffff;
+  --tone-6-fg: #000000;
+  --folder-teal: #5eead4;
+  --folder-purple: #c4b5fd;
+  --folder-orange: #fdba74;
+  --folder-blue: #93c5fd;
+  --folder-green: #86efac;
+  --folder-pink: #f9a8d4;
+  --folder-gray: #e4e4e7;
+}
+
+[data-font="hyperlegible"] {
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+}
+[data-font="system"] {
+  --font-body: system-ui, "Segoe UI", sans-serif;
+  --font-display: system-ui, "Segoe UI", sans-serif;
+}
+[data-density="compact"] {
+  --density: 0.78;
+  --lh: 1.45;
+}
+[data-density="roomy"] {
+  --density: 1.3;
+  --lh: 1.72;
+}

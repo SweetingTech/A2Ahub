@@ -1,0 +1,190 @@
+/* Base elements, reduced motion and buttons. */
+/* ---------- Base ---------- */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.015em;
+}
+code,
+kbd,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}
+a {
+  color: var(--accent-ink);
+}
+a:hover {
+  color: var(--accent-hover);
+}
+button {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 550;
+  border-radius: 10px;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+[data-focus="thick"] :focus-visible {
+  outline: 4px solid #ffbf47;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #000000;
+}
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -4rem;
+  z-index: 60;
+  padding: 0.75rem 1rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 10px;
+  font-weight: 600;
+}
+.skip-link:focus {
+  top: 0.5rem;
+}
+.muted {
+  color: var(--muted);
+}
+
+/* ---------- Buttons ---------- */
+button.primary,
+.button.primary {
+  border: var(--border-w) solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.7rem 1.1rem;
+  min-height: 2.75rem;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.outline,
+.button.outline {
+  border: var(--border-w) solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.65rem 1rem;
+  min-height: 2.75rem;
+}
+.outline:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 550;
+  text-decoration: none;
+}
+.small {
+  min-height: 2.25rem !important;
+  padding: 0.35rem 0.75rem !important;
+  font-size: 0.8125rem !important;
+}
+.danger.primary,
+button.primary.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+[data-theme="hcdark"] button.primary.danger,
+[data-theme="midnight"] button.primary.danger {
+  color: #000000;
+}
+.outline.danger {
+  color: var(--danger-ink);
+  border-color: var(--danger-line);
+}
+.icon {
+  border: 0;
+  background: transparent;
+  padding: 0.4rem;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  color: var(--muted);
+}
+.icon:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.text-button,
+.link-button {
+  border: 0;
+  background: transparent;
+  padding: 0.25rem 0;
+  color: var(--accent-ink);
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.link-button {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  text-align: left;
+}
+.link-button:hover {
+  text-decoration: underline;
+}

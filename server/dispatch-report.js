@@ -15,7 +15,7 @@ export function report(broker, account, command = {}) {
   const job = broker.jobs.get(command.dispatchId);
   if (!job) {
     if (broker.journal && command.kind === "complete") {
-      const prior = broker.journal.getCompletion(command.dispatchId);
+      const prior = broker.journal.getCompletion(command.dispatchId, account.id);
       if (prior) {
         const dig = digestContent(command.result?.text || "");
         if (prior.contentDigest === dig)
@@ -135,6 +135,8 @@ export function recordCompletion(broker, job, result, kind) {
   if (broker.journal) {
     return broker.journal.recordCompletion({
       dispatchId: job.dispatchId,
+      accountId: job.accountId,
+      roomId: job.roomId,
       text: result.text,
       state: result.state,
       contextId: result.contextId,

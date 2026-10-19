@@ -1,0 +1,238 @@
+/* Library table and bulk actions. */
+/* Library */
+.library-page {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.library-views {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  position: sticky;
+  top: 0;
+}
+.library-group {
+  margin: 1rem 0 0.25rem;
+  padding: 0 0.6rem;
+  font-family: var(--font-body);
+  font-size: 0.75rem !important;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.library-view {
+  justify-content: flex-start;
+  gap: 0.6rem;
+  min-height: 2.6rem;
+  padding: 0 0.7rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  border-radius: 10px;
+}
+.library-view:hover {
+  background: var(--surface-3);
+}
+.library-view.current {
+  background: var(--surface);
+  box-shadow: 0 0 0 var(--border-w) var(--line-strong);
+  font-weight: 650;
+}
+.library-view-name {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-folder {
+  justify-content: flex-start;
+  gap: 0.6rem;
+  min-height: 2.6rem;
+  padding: 0 0.7rem;
+  margin-top: 0.25rem;
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+  color: var(--text-2);
+  border-radius: 10px;
+}
+.library-spacer {
+  height: 1rem;
+}
+.library-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.25rem 1.4rem;
+  background: var(--surface);
+  border: var(--border-w) solid var(--line);
+  border-radius: 16px;
+}
+.library-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.library-header h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 1.5rem;
+}
+.library-search {
+  flex: 0 1 18rem;
+}
+.library-note {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  background: var(--surface-3);
+  font-size: 0.875rem !important;
+}
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.9rem;
+  border-radius: 12px;
+  background: var(--rail);
+  color: #f5f4f0;
+}
+.bulk-bar strong {
+  flex: 1;
+}
+.bulk-bar .outline {
+  background: transparent;
+  color: #f5f4f0;
+  border-color: #5a5a64;
+}
+.bulk-bar .icon {
+  color: #f5f4f0;
+}
+.bulk-move select {
+  min-height: 2.75rem;
+  width: auto;
+}
+[data-theme="hcdark"] .bulk-bar {
+  border: 2px solid #ffffff;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+.library-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.library-table th {
+  text-align: left;
+  padding: 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.library-table td {
+  padding: calc(0.7rem * var(--density)) 0.5rem;
+  border-top: 1px solid var(--line);
+  vertical-align: middle;
+}
+.library-table td .pill,
+.library-table td .room-pin {
+  margin-left: 0.5rem;
+}
+.library-table tr.picked td {
+  background: var(--accent-soft);
+}
+.check-col {
+  width: 2.5rem;
+}
+.num-col {
+  text-align: center !important;
+}
+.row-actions {
+  text-align: right;
+}
+.folder-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.library-empty {
+  padding: 2rem 0.5rem;
+  text-align: center;
+  color: var(--muted) !important;
+}
+.swatch-picker {
+  border: 0;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.swatch-picker legend {
+  width: 100%;
+}
+.swatch-option {
+  position: relative;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  cursor: pointer;
+  margin: 0 !important;
+  background: var(--folder-gray);
+}
+.swatch-option input {
+  position: absolute;
+  opacity: 0;
+}
+.swatch-option:has(input:checked) {
+  box-shadow:
+    0 0 0 3px var(--surface),
+    0 0 0 6px var(--text);
+}
+.swatch-option:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 6px;
+}
+.swatch-option.teal {
+  background: var(--folder-teal);
+}
+.swatch-option.purple {
+  background: var(--folder-purple);
+}
+.swatch-option.orange {
+  background: var(--folder-orange);
+}
+.swatch-option.blue {
+  background: var(--folder-blue);
+}
+.swatch-option.green {
+  background: var(--folder-green);
+}
+.swatch-option.pink {
+  background: var(--folder-pink);
+}
+.delete-list {
+  margin: 0.5rem 0 1rem;
+  padding-left: 1.25rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.modal .dialog-actions .primary {
+  width: auto;
+  margin: 0;
+}

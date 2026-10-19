@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EventJournal, messageEvent, RETENTION_MS } from "../server/events.js";
+import { EventJournal, RETENTION_MS } from "../server/events.js";
+import { messageEvent } from "../server/event-sync.js";
 import { DispatchBroker } from "../server/dispatch.js";
 
 // ─── Helpers ───
@@ -223,23 +224,25 @@ test("§5A: Event cursor is separate from message array index", () => {
 test("§5B: Acknowledgment persists through serialization", () => {
   const journal = new EventJournal({ now: () => 100000 });
   journal.append({ type: "message.created", roomId: "r1", payload: {} });
-  journal.acknowledge("a1", "r1", 1);
+  journal.acknowledge("a1", "r1", 1, 1);
   const json = journal.toJSON();
   const restored = EventJournal.fromJSON(json);
-  assert.equal(restored.getCursor("a1", "r1"), 1, "Ack cursor must persist");
+  assert.equal(restored.getCursor("a1", "r1", 1), 1, "Ack cursor must persist");
 });
 
 test("§5C: Monotonic sequence survives trimming", () => {
   const journal = new EventJournal({ now: () => 100000, maxEvents: 3 });
   for (let i = 0; i < 5; i++)
     journal.append({ type: "message.created", roomId: "r1", payload: { i } });
-  // Events trimmed to 3, but sequence counter continues
-  const read = journal.read("r1", 0);
+  // Events trimmed to 3, but sequence counter continues; a cursor before the
+  // retained window is told to resync instead of silently skipping a gap.
+  assert.equal(journal.read("r1", 0).resyncRequired, true);
+  const read = journal.read("r1", 2);
   assert.equal(read.events.length, 3, "Should have 3 events after trim");
   assert.ok(read.events[0].seq > 1, "Oldest retained event seq > 1 after trim");
   // New event continues from last seq
   journal.append({ type: "message.created", roomId: "r1", payload: {} });
-  const read2 = journal.read("r1", 0);
+  const read2 = journal.read("r1", 3);
   assert.equal(read2.events.at(-1).seq, 6, "Seq continues monotonically");
 });
 
@@ -251,7 +254,7 @@ test("§5D: Reject future (out-of-order) acknowledgments", () => {
   assert.equal(latest, 1);
   // Acknowledging cursor 5 when only seq 1 exists should be rejected
   assert.throws(
-    () => journal.acknowledge("a1", "r1", 5),
+    () => journal.acknowledge("a1", "r1", 1, 5),
     /cursor.*beyond.*latest|invalid.*cursor/i,
     "Must reject acknowledgment beyond latest event seq",
   );
@@ -301,7 +304,7 @@ test("§3C: Reconcile returns unknown for wrong agent", async () => {
   broker.close();
 });
 
-test("§3D: Reconcile returns uncertain for done job with possible remote continuation", async () => {
+test("§3D: Reconcile reports a durable receipt as completed, never uncertain", async () => {
   const journal = new EventJournal({ now: () => 100000 });
   const broker = makeBroker(journal);
   const { poll } = await setupAndClaim(broker);
@@ -311,10 +314,12 @@ test("§3D: Reconcile returns uncertain for done job with possible remote contin
     connectorId: "c1", kind: "complete",
     result: { text: "done", state: "completed", contextId: "ctx" },
   });
-  // A surviving receiver that lost the HTTP response should see "uncertain"
-  // because the Hub accepted the result but remote execution may still be running
+  // The Hub durably accepted the result, so a receiver that lost the HTTP
+  // response learns it completed instead of being told it is uncertain.
   const status = broker.reconcileClaim("a1", poll.dispatch.dispatchId);
-  assert.equal(status.state, "uncertain", "Done job should report uncertain, not valid");
+  assert.equal(status.state, "completed");
+  assert.equal(status.receipt.dispatchId, poll.dispatch.dispatchId);
+  assert.equal(broker.reconcileClaim("a2", poll.dispatch.dispatchId).state, "unknown");
   broker.close();
 });
 

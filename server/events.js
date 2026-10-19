@@ -1,13 +1,12 @@
 import { randomUUID, createHash } from "node:crypto";
 
-// Event journal: a durable, append-only log of room events that backs the
-// versioned event-cursor read contract. Events are separate from the
-// in-memory room.messages array; the journal survives restarts and powers
-// at-least-once notification delivery with idempotent consumption.
+// Event journal: a durable, append-only log of room events backing the
+// versioned event-cursor contract. Per-room sequences are monotonic and their
+// high-water marks survive trimming and restart. Entries become visible to
+// readers and subscribers only after the persist callback succeeds.
 
 const MAX_EVENTS = 50000;
 export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_QUEUE = 2000;
 
 const EVENT_TYPES = new Set([
   "message.created",
@@ -33,63 +32,80 @@ export function digestContent(text) {
   return createHash("sha256").update(text || "").digest("hex").slice(0, 32);
 }
 
+export class CursorError extends Error {
+  constructor(status, message, extra = {}) {
+    super(message);
+    Object.assign(this, { status }, extra);
+  }
+}
+
+// Parse an exclusive event cursor. Accepts a non-negative safe integer given
+// as a number or a decimal string; anything else is rejected.
+export function parseCursor(value, { fallback = 0 } = {}) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "string" && !/^\d{1,16}$/.test(value))
+    throw new CursorError(400, "Invalid event cursor.");
+  const n = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(n) || n < 0)
+    throw new CursorError(400, "Invalid event cursor.");
+  return n;
+}
+
 export class EventJournal {
-  constructor({ now = Date.now, maxEvents } = {}) {
+  constructor({ now = Date.now, maxEvents, persist = () => {} } = {}) {
     this.now = now;
+    this.persist = persist;
     this.events = [];
     this.byId = new Map();
     this.byRoom = new Map();
     this.sequences = new Map();
+    this.trimmedThrough = new Map();
     this.ackCursors = new Map();
     this.completionReceipts = new Map();
+    this.messageMarks = new Map();
+    this.knownRooms = new Set();
     this.subscribers = new Map();
     this.retentionMs = RETENTION_MS;
     this.maxEvents = maxEvents || MAX_EVENTS;
-    this.maxQueue = MAX_QUEUE;
   }
 
-  // Pub/sub: subscribers are notified when new events are appended.
-  // Returns an unsubscribe function.
   subscribe(roomId, listener) {
     if (!this.subscribers.has(roomId)) this.subscribers.set(roomId, new Set());
     this.subscribers.get(roomId).add(listener);
     return () => {
       const set = this.subscribers.get(roomId);
-      if (set) {
-        set.delete(listener);
-        if (!set.size) this.subscribers.delete(roomId);
-      }
+      if (!set) return;
+      set.delete(listener);
+      if (!set.size) this.subscribers.delete(roomId);
     };
   }
 
   notify(entry) {
-    const set = this.subscribers.get(entry.roomId);
-    if (set) for (const listener of set) {
-      try { listener(entry); } catch {}
+    for (const listener of this.subscribers.get(entry.roomId) || []) {
+      try {
+        listener(entry);
+      } catch (error) {
+        console.error(`Event subscriber failed: ${error.message}`);
+      }
     }
   }
 
-  append(event) {
+  build(event, seq) {
     if (!event || !EVENT_TYPES.has(event.type))
       throw new Error(`Unknown event type: ${event?.type}`);
     if (!event.roomId || typeof event.roomId !== "string")
       throw new Error("Event requires a roomId.");
-    // Idempotent submission: deduplicate by eventId if provided.
-    if (event.eventId && this.byId.has(event.eventId))
-      return this.byId.get(event.eventId);
-    const seq = (this.sequences.get(event.roomId) || 0) + 1;
-    this.sequences.set(event.roomId, seq);
-    const entry = {
+    return Object.freeze({
       eventId: event.eventId || randomUUID(),
       type: event.type,
       roomId: event.roomId,
       seq,
+      originSeq: event.originSeq || seq,
       messageId: event.messageId || null,
       messageRevision: event.messageRevision || 1,
       senderId: event.senderId || null,
       senderName: event.senderName || null,
       audience: Object.freeze([...(event.audience || [])]),
-      membershipGeneration: event.membershipGeneration || 0,
       threadId: event.threadId || null,
       replyTo: event.replyTo || null,
       correlationId: event.correlationId || null,
@@ -100,188 +116,225 @@ export class EventJournal {
       receiptRef: event.receiptRef || null,
       createdAt: event.createdAt || new Date(this.now()).toISOString(),
       payload: event.payload || {},
-    };
-    Object.freeze(entry);
+    });
+  }
+
+  // Commit events atomically: assign sequences, persist, then notify. A
+  // persist failure rolls everything back and rethrows, so nothing unsaved is
+  // ever published. `before` may stage extra durable state in the same commit.
+  commit(events, { before } = {}) {
+    const fresh = events.filter((e) => !(e.eventId && this.byId.has(e.eventId)));
+    const savedSeq = new Map(this.sequences);
+    const entries = fresh.map((e) => {
+      const seq = (this.sequences.get(e.roomId) || 0) + 1;
+      this.sequences.set(e.roomId, seq);
+      const originSeq =
+        typeof e.originSeq === "function" ? e.originSeq(seq) : e.originSeq;
+      return this.build({ ...e, originSeq }, seq);
+    });
+    const undo = before?.(entries);
+    for (const entry of entries) this.index(entry);
+    try {
+      this.persist(this);
+    } catch (error) {
+      for (const entry of entries) this.unindex(entry);
+      this.sequences = savedSeq;
+      undo?.();
+      throw error;
+    }
+    this.trim();
+    for (const entry of entries) this.notify(entry);
+    return entries;
+  }
+
+  append(event) {
+    if (event?.eventId && this.byId.has(event.eventId))
+      return this.byId.get(event.eventId);
+    return this.commit([event])[0];
+  }
+
+  index(entry) {
     this.events.push(entry);
     this.byId.set(entry.eventId, entry);
-    let roomList = this.byRoom.get(entry.roomId);
-    if (!roomList) {
-      roomList = [];
-      this.byRoom.set(entry.roomId, roomList);
-    }
-    roomList.push(entry);
-    this.trim();
-    this.notify(entry);
-    return entry;
+    if (!this.byRoom.has(entry.roomId)) this.byRoom.set(entry.roomId, []);
+    this.byRoom.get(entry.roomId).push(entry);
+  }
+
+  unindex(entry) {
+    this.events = this.events.filter((e) => e !== entry);
+    this.byId.delete(entry.eventId);
+    const list = this.byRoom.get(entry.roomId) || [];
+    this.byRoom.set(entry.roomId, list.filter((e) => e !== entry));
   }
 
   trim() {
     const cutoff = this.now() - this.retentionMs;
     let removed = 0;
-    while (this.events.length > this.maxEvents) {
+    while (
+      this.events.length &&
+      (this.events.length > this.maxEvents ||
+        Date.parse(this.events[0].createdAt) <= cutoff)
+    ) {
       const old = this.events.shift();
       this.byId.delete(old.eventId);
+      this.trimmedThrough.set(
+        old.roomId,
+        Math.max(this.trimmedThrough.get(old.roomId) || 0, old.seq),
+      );
       removed++;
     }
-    if (this.events.length > 0) {
-      while (this.events.length > 0 && removed < this.maxEvents) {
-        const oldest = this.events[0];
-        if (Date.parse(oldest.createdAt) > cutoff) break;
-        this.events.shift();
-        this.byId.delete(oldest.eventId);
-        removed++;
-      }
-    }
-    if (removed > 0) {
-      for (const [roomId, list] of this.byRoom) {
-        const filtered = list.filter((e) => this.byId.has(e.eventId));
-        if (filtered.length === 0) this.byRoom.delete(roomId);
-        else this.byRoom.set(roomId, filtered);
-      }
+    if (!removed) return;
+    for (const [roomId, list] of this.byRoom) {
+      const kept = list.filter((e) => this.byId.has(e.eventId));
+      if (kept.length) this.byRoom.set(roomId, kept);
+      else this.byRoom.delete(roomId);
     }
   }
 
-  // Read events for a room starting from a cursor position.
-  // Returns { events, nextCursor, resyncRequired }.
-  // A cursor is an event sequence number within the room.
-  // If the cursor points to an expired event, resyncRequired is true.
-  read(roomId, cursor = 0, { maxBatch = 100 } = {}) {
+  latestSeq(roomId) {
+    return this.sequences.get(roomId) || 0;
+  }
+
+  // Read events with seq > after, up to maxBatch and an optional captured
+  // high-water mark. Future cursors are rejected; cursors whose successors
+  // were trimmed report resyncRequired instead of silently skipping a gap.
+  read(roomId, after = 0, { maxBatch = 100, until } = {}) {
+    const latest = this.latestSeq(roomId);
+    if (!Number.isSafeInteger(after) || after < 0)
+      throw new CursorError(400, "Invalid event cursor.");
+    if (after > latest)
+      throw new CursorError(400, "Event cursor is ahead of this room.", {
+        latestSeq: latest,
+      });
+    const trimmed = this.trimmedThrough.get(roomId) || 0;
+    if (after < trimmed)
+      return {
+        events: [],
+        nextCursor: after,
+        resyncRequired: true,
+        oldestSeq: trimmed + 1,
+        latestSeq: latest,
+      };
+    const limit = Math.min(until ?? latest, latest);
     const list = this.byRoom.get(roomId) || [];
-    if (cursor > 0) {
-      const oldest = list[0];
-      if (oldest && cursor < oldest.seq) {
-        return {
-          events: [],
-          nextCursor: cursor,
-          resyncRequired: true,
-          oldestSeq: oldest.seq,
-        };
-      }
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid].seq <= after) lo = mid + 1;
+      else hi = mid;
     }
-    const filtered = list.filter((e) => e.seq > cursor);
-    const batch = filtered.slice(0, maxBatch);
+    const events = [];
+    for (let i = lo; i < list.length && events.length < maxBatch; i++) {
+      if (list[i].seq > limit) break;
+      events.push(list[i]);
+    }
     return {
-      events: batch,
-      nextCursor: batch.length
-        ? batch[batch.length - 1].seq
-        : cursor,
+      events,
+      nextCursor: events.length ? events[events.length - 1].seq : after,
       resyncRequired: false,
+      latestSeq: latest,
+      more: !!events.length && events[events.length - 1].seq < limit,
     };
   }
 
-  // Get the latest event sequence for a room (useful for initial cursor).
-  latestSeq(roomId) {
-    const list = this.byRoom.get(roomId);
-    return list && list.length ? list[list.length - 1].seq : 0;
+  // Acknowledgments are progress markers for one membership incarnation;
+  // they never grant access. Persisted before success is returned.
+  ackKey(accountId, roomId, incarnation) {
+    return `${accountId}:${roomId}:${incarnation}`;
   }
 
-  // Per-recipient cursor tracking for acknowledgments.
-  getCursor(accountId, roomId) {
-    const key = `${accountId}:${roomId}`;
-    return this.ackCursors.get(key) || 0;
+  getCursor(accountId, roomId, incarnation) {
+    return this.ackCursors.get(this.ackKey(accountId, roomId, incarnation)) || 0;
   }
 
-  acknowledge(accountId, roomId, cursor) {
-    if (!Number.isInteger(cursor) || cursor < 0)
-      throw new Error("Invalid acknowledgment cursor.");
-    const latest = this.latestSeq(roomId);
-    if (cursor > latest)
-      throw new Error("Acknowledgment cursor beyond latest event seq.");
-    const key = `${accountId}:${roomId}`;
-    const current = this.ackCursors.get(key) || 0;
-    if (cursor > current) this.ackCursors.set(key, cursor);
+  acknowledge(accountId, roomId, incarnation, cursor) {
+    const value = parseCursor(cursor, { fallback: NaN });
+    if (Number.isNaN(value)) throw new CursorError(400, "Invalid event cursor.");
+    if (value > this.latestSeq(roomId))
+      throw new CursorError(400, "Acknowledgment cursor beyond latest event.");
+    const key = this.ackKey(accountId, roomId, incarnation);
+    const previous = this.ackCursors.get(key) || 0;
+    if (value <= previous) return { acknowledged: previous, previous };
+    this.ackCursors.set(key, value);
+    try {
+      this.persist(this);
+    } catch (error) {
+      if (previous) this.ackCursors.set(key, previous);
+      else this.ackCursors.delete(key);
+      throw error;
+    }
+    return { acknowledged: value, previous };
   }
 
-  // Completion receipts: idempotent by (dispatchId, contentDigest).
-  // Returns { accepted, receipt, duplicate, conflict }.
-  recordCompletion({ dispatchId, text, state, contextId, taskId }) {
+  // Completion receipts: idempotent per dispatch, bound to the reporting
+  // account and room, and persisted before acceptance is returned.
+  recordCompletion({ dispatchId, accountId, roomId, text, state, contextId, taskId }) {
     if (!dispatchId) throw new Error("dispatchId is required for completion receipt.");
-    const dig = digestContent(text);
+    const contentDigest = digestContent(text);
     const existing = this.completionReceipts.get(dispatchId);
     if (existing) {
-      if (existing.contentDigest === dig)
-        return { accepted: true, receipt: existing, duplicate: true, conflict: false };
-      return { accepted: false, receipt: existing, duplicate: false, conflict: true };
+      const same = existing.contentDigest === contentDigest;
+      return { accepted: same, receipt: existing, duplicate: same, conflict: !same };
     }
-    const receipt = {
+    const receipt = Object.freeze({
       dispatchId,
-      contentDigest: dig,
+      accountId: accountId || null,
+      roomId: roomId || null,
+      contentDigest,
       text: text || "",
       state: state || "completed",
       contextId: contextId || null,
       taskId: taskId || null,
       acceptedAt: new Date(this.now()).toISOString(),
-    };
-    Object.freeze(receipt);
+    });
     this.completionReceipts.set(dispatchId, receipt);
+    try {
+      this.persist(this);
+    } catch (error) {
+      this.completionReceipts.delete(dispatchId);
+      throw error;
+    }
     return { accepted: true, receipt, duplicate: false, conflict: false };
   }
 
-  getCompletion(dispatchId) {
-    return this.completionReceipts.get(dispatchId) || null;
+  getCompletion(dispatchId, accountId) {
+    const receipt = this.completionReceipts.get(dispatchId) || null;
+    if (receipt && accountId !== undefined && receipt.accountId !== accountId)
+      return null;
+    return receipt;
   }
 
-  // Serialize for persistence.
   toJSON() {
     return {
+      version: 2,
       events: this.events,
-      ackCursors: [...this.ackCursors.entries()],
-      completionReceipts: [...this.completionReceipts.entries()],
+      sequences: [...this.sequences],
+      trimmedThrough: [...this.trimmedThrough],
+      ackCursors: [...this.ackCursors],
+      completionReceipts: [...this.completionReceipts],
+      messageMarks: [...this.messageMarks],
+      knownRooms: [...this.knownRooms],
     };
   }
 
-  static fromJSON(data, { now = Date.now } = {}) {
-    const journal = new EventJournal({ now });
-    if (data?.events) {
-      journal.events = data.events;
-      for (const e of data.events) journal.byId.set(e.eventId, e);
-      for (const e of data.events) {
-        let list = journal.byRoom.get(e.roomId);
-        if (!list) {
-          list = [];
-          journal.byRoom.set(e.roomId, list);
-        }
-        list.push(e);
-        journal.sequences.set(e.roomId, e.seq);
-      }
+  static fromJSON(data, options = {}) {
+    const journal = new EventJournal(options);
+    for (const e of data?.events || []) {
+      const entry = Object.freeze({ ...e, originSeq: e.originSeq || e.seq });
+      journal.index(entry);
+      journal.sequences.set(
+        e.roomId,
+        Math.max(journal.sequences.get(e.roomId) || 0, e.seq),
+      );
     }
-    if (data?.ackCursors)
-      journal.ackCursors = new Map(data.ackCursors);
-    if (data?.completionReceipts)
-      journal.completionReceipts = new Map(data.completionReceipts);
+    for (const [roomId, seq] of data?.sequences || [])
+      journal.sequences.set(roomId, Math.max(journal.latestSeq(roomId), seq));
+    journal.trimmedThrough = new Map(data?.trimmedThrough || []);
+    if (data?.version === 2) journal.ackCursors = new Map(data.ackCursors || []);
+    journal.completionReceipts = new Map(data?.completionReceipts || []);
+    journal.messageMarks = new Map(data?.messageMarks || []);
+    journal.knownRooms = new Set(data?.knownRooms || []);
     return journal;
   }
-}
-
-// Build an event from a room message for the journal.
-export function messageEvent(message, { room, discussionId, causationId } = {}) {
-  const type =
-    message.state === "completed"
-      ? "message.completed"
-      : message.state === "working" || message.state === "submitted"
-        ? "message.updated"
-        : "message.created";
-  return {
-    type,
-    roomId: room.id,
-    messageId: message.id,
-    messageRevision: message.revision || 1,
-    senderId:
-      message.role === "user"
-        ? "owner"
-        : message.agentId || message.inboundAccountId || null,
-    senderName: message.name || null,
-    audience: message.recipientIds || [...(room.agentIds || [])],
-    membershipGeneration: room.membershipGeneration || 0,
-    threadId: message.threadId || null,
-    replyTo: message.inReplyTo || null,
-    discussionId: discussionId || message.discussionId || null,
-    causationId: causationId || null,
-    payload: {
-      role: message.role,
-      state: message.state,
-      text: message.text || "",
-      name: message.name || "",
-    },
-  };
 }

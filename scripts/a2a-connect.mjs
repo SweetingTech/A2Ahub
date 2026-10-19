@@ -53,12 +53,11 @@ export async function runConnector({
     } catch (error) {
       if (signal?.aborted || isTerminal(error)) throw error;
       // Transient transport failure: back off and retry.
-      backoff = Math.min(
-        backoff === 0 ? 1000 : backoff * 2,
-        MAX_BACKOFF,
-      );
+      backoff = Math.min(backoff === 0 ? 1000 : backoff * 2, MAX_BACKOFF);
       const jitter = Math.floor(Math.random() * 500);
-      log(`Transport error, retrying in ${backoff + jitter}ms: ${error.message}`);
+      log(
+        `Transport error, retrying in ${backoff + jitter}ms: ${error.message}`,
+      );
       await sleep(backoff + jitter, signal);
       return callWithRetry(command);
     }
@@ -180,7 +179,9 @@ export async function runConnector({
             dispatchId: active.dispatch.dispatchId,
           });
           if (status.state === "interrupted") {
-            log("Hub restarted; claim interrupted. Sealing and reporting error.");
+            log(
+              "Hub restarted; claim interrupted. Sealing and reporting error.",
+            );
             await stopRemote(active);
             await call({
               action: "report_dispatch",
@@ -188,11 +189,18 @@ export async function runConnector({
               dispatchId: active.dispatch.dispatchId,
               leaseId: active.dispatch.leaseId,
               kind: "error",
-              result: { text: "Claim interrupted by Hub restart.", state: "failed" },
-            }).catch(() => {});
+              result: {
+                text: "Claim interrupted by Hub restart.",
+                state: "failed",
+              },
+            }).catch((error) =>
+              log(`Could not report interrupted claim: ${error.message}`),
+            );
             active = null;
           }
-        } catch {}
+        } catch (error) {
+          log(`Claim reconciliation failed: ${error.message}`);
+        }
       }
       if (result.dispatch) start(result.dispatch);
       await sleep(
@@ -215,7 +223,9 @@ export async function runConnector({
           text: "Connector stopped; remote work may continue.",
           state: "failed",
         },
-      }).catch(() => {});
+      }).catch((error) =>
+        log(`Could not report stopped work: ${error.message}`),
+      );
       await work.done;
     }
   }

@@ -72,16 +72,21 @@ Per-recipient cursors are persisted in the event journal. On restart:
 2. Agents can resume reading from their last acknowledged cursor
 3. `resync_required` is returned if the cursor points to expired events
 
-## SSE cursor catch-up
+## Event stream version 2 (breaking)
 
-The SSE notification stream (`/a2a/events`) now supports cursor-based
-catch-up. When an agent reconnects with a `cursor` query parameter:
+The multiplexed `/a2a/events` stream is replaced by the single-room
+`/a2a/v2/events?roomId=&cursor=` stream described in
+[AGENT-ACCESS.md](AGENT-ACCESS.md#sse-notification-stream). Consumers must
+open one stream per room and resume with that room's own cursor or
+`Last-Event-ID: <roomId>:<seq>`. Expired cursors return 410 instead of a
+`resync-required` frame.
 
-1. The stream replays missed events from the journal
-2. After catch-up completes, live delivery begins seamlessly
-3. The transition is race-free: the subscription is registered before
-   catch-up reads finish, so no events are lost between catch-up and live
-4. If the cursor is expired, a `resync-required` frame is sent
+On first start after upgrading, every existing member receives a membership
+incarnation whose boundary is the room's current journal high-water mark.
+No older history is exposed, and the first new event is delivered at once
+even when the transcript is far longer than the journal. Acknowledgments
+are now kept per membership incarnation, so a removed and re-added member
+starts from its new boundary.
 
 ## Session receiver reconciliation
 
@@ -89,12 +94,17 @@ Session receivers (`scripts/session-runtime.mjs`) now call `reconcile_claim`
 on every poll cycle, not just after transport errors. This detects Hub
 restarts proactively before accepting new work.
 
-## Three-agent integration harness
+## Gateway tests
 
-Run `npm run test:integration:gateway` to exercise the full gateway cycle
-with three mock agents: concurrent dispatch, durable receipts, Stop-all
-with generation invalidation, reconciliation after simulated restart,
-event journaling, and cursor catch-up.
+`npm run test:integration:gateway` starts a real disposable Hub process
+with temporary data and ports, three mock A2A HTTP agents, the production
+connector and session receiver, and real HTTP/SSE clients (scenarios A-G).
+`npm run test:component:gateway` runs the in-process component tests for
+broker, chat and journal wiring.
+
+The real-transport suite drives credential expiry with
+`A2AHUB_TEST_CLOCK_FILE`, a test-only clock offset file that must sit
+directly inside `A2AHUB_DATA_DIR`. Never set it for a real installation.
 
 ## Threads and mentions migration
 

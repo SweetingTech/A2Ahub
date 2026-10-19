@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DispatchBroker } from "../server/dispatch.js";
 import { GroupChat } from "../server/chat.js";
-import { EventJournal, messageEvent } from "../server/events.js";
+import { EventJournal } from "../server/events.js";
+import { messageEvent } from "../server/event-sync.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));

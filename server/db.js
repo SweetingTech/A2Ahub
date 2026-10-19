@@ -78,9 +78,32 @@ export function migrateRooms(db) {
   }
 }
 
+// Write-to-temp, fsync, rename, then fsync the directory so a crash leaves
+// either the previous or the new file, never a truncated one.
+export function writeDurable(target, data) {
+  const tmp = `${target}.tmp`;
+  const fd = fs.openSync(tmp, "w", 0o600);
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, target);
+  try {
+    const dir = fs.openSync(path.dirname(target), "r");
+    try {
+      fs.fsyncSync(dir);
+    } finally {
+      fs.closeSync(dir);
+    }
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+  }
+}
+
 export function saveDB(file, db) {
-  fs.writeFileSync(file + ".tmp", JSON.stringify(db, null, 2));
-  fs.renameSync(file + ".tmp", file);
+  writeDurable(file, JSON.stringify(db, null, 2));
 }
 
 export { FOLDER_COLORS };

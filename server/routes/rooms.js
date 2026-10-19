@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { discover } from "../protocol.js";
+import { CursorError, parseCursor } from "../events.js";
+import { publicEvent } from "../event-access.js";
 import {
   buildRoomLink,
   MOCK_CONTRACT,
@@ -49,21 +51,22 @@ export function mountRoomRoutes(ctx) {
 
   app.get("/api/rooms/:id/events", (req, res) => {
     const r = getRoom(req.params.id);
-    const cursor = Number(req.query.cursor || 0);
-    const result = journal.read(r.id, cursor, { maxBatch: 500 });
+    let result;
+    try {
+      const cursor = parseCursor(req.query.cursor, { fallback: NaN });
+      if (Number.isNaN(cursor)) throw new CursorError(400, "Invalid event cursor.");
+      result = journal.read(r.id, cursor, { maxBatch: 500 });
+    } catch (e) {
+      return res
+        .status(e.status || 400)
+        .json({ error: e.message, latestSeq: journal.latestSeq(r.id) });
+    }
     res.json({
       roomId: r.id,
-      events: result.events.map((e) => ({
-        eventId: e.eventId,
-        type: e.type,
-        seq: e.seq,
-        messageId: e.messageId,
-        senderId: e.senderId,
-        senderName: e.senderName,
-        createdAt: e.createdAt,
-        payload: e.payload,
-      })),
+      events: result.events.map(publicEvent),
       nextCursor: result.nextCursor,
+      latestSeq: result.latestSeq,
+      more: !!result.more,
       ...(result.resyncRequired
         ? { resyncRequired: true, oldestSeq: result.oldestSeq }
         : {}),
@@ -89,7 +92,10 @@ export function mountRoomRoutes(ctx) {
     }
     const cursors = {};
     for (const a of r.agentIds) {
-      cursors[a] = journal.getCursor(a, r.id);
+      const grant = r.eventSince?.[a];
+      cursors[a] = grant
+        ? { acknowledged: journal.getCursor(a, r.id, grant.incarnation), since: grant.seq }
+        : null;
     }
     res.json({
       roomId: r.id,
@@ -214,6 +220,8 @@ export function makeUpdateRoom({
   access,
   broker,
   validateMembers,
+  eventSync,
+  sse,
 }) {
   return function updateRoom(r, body) {
     if (chat.active(r.id).length)
@@ -251,6 +259,11 @@ export function makeUpdateRoom({
       delete r.contexts[id];
       r.memberSince[id] = r.messages.length;
     }
+    for (const id of removed) {
+      eventSync.end(r, id);
+      sse.closeFor(id, r.id);
+    }
+    for (const id of added) eventSync.grant(r, id);
     access.setRoomMembers(
       r,
       agentIds.filter((id) => access.db.accounts.some((a) => a.id === id)),

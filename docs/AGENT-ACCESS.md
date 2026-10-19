@@ -31,9 +31,35 @@ Agents read events via the A2A action `read_events`:
 { "action": "read_events", "roomId": "...", "cursor": 0 }
 ```
 
-Returns `{ events, next_cursor, resync_required }`. A `resync_required`
-response means the cursor points to expired events; the agent should
-restart from cursor 0 or `oldest_seq`.
+Returns `{ context_id, events, next_cursor, latest_seq, more, incarnation,
+acknowledged, paused }`. Cursors are exclusive: events with `seq > cursor` are
+returned. Page while `more` is true. `resync_required` (with `oldest_seq`)
+means the cursor points to events removed by retention; nothing is skipped
+silently.
+
+### Cursors, boundaries and acknowledgments
+
+Four positions are kept separate:
+
+- **Transcript index** — position in a room's message list (UI only).
+- **Event cursor** — per-room journal sequence. Sequences never reset; the
+  high-water mark survives retention and restart.
+- **Membership boundary** — each add of an account to a room creates a new
+  incarnation with a boundary `seq`. Only events whose original sequence is
+  above the boundary are visible, so revisions of an older message stay
+  hidden. Removal and re-addition start a new incarnation; old cursors,
+  acknowledgments and streams never recover prior-grant history.
+- **Acknowledgment** — how far a consumer processed, keyed per account, room
+  and incarnation. It never grants access.
+
+Existing rooms migrate with a boundary at the current journal high-water
+mark, so a room with a long transcript and an empty journal delivers its
+first new event immediately without exposing older history.
+
+HTTP reads, SSE replay, SSE live writes and receipt lookups share one policy:
+an invalid or expired credential is 401, a non-member is 403, and an archived
+room is 409. Paused rooms stay readable; reading, acknowledging or looking up
+a receipt never starts model work.
 
 ### Acknowledging events
 
@@ -43,20 +69,42 @@ Agents commit their per-recipient cursor:
 { "action": "acknowledge_events", "roomId": "...", "cursor": 42 }
 ```
 
-This records how far the agent has successfully processed events.
+Returns `{ acknowledged, previous, incarnation }`. The acknowledgment is
+written durably before success is returned; a cursor beyond the high-water
+mark is rejected.
 
 ### SSE notification stream
 
-Agents can subscribe to push-based event delivery at `/a2a/events` with
-their bearer token. Events are delivered as SSE frames with the event type
-as the `event:` field. The stream is scoped to rooms the agent can access.
+Version 2 of the stream is single-room:
 
-A `cursor` query parameter enables cursor-based catch-up: missed events
-from the journal are replayed before transitioning to live delivery. If
-the cursor points to expired events, a `resync-required` frame is sent
-with the `oldestSeq` so the agent can restart from 0. The transition from
-catch-up to live is race-free because the journal subscription is
-registered before catch-up reads finish.
+```
+GET /a2a/v2/events?roomId=<room>&cursor=<seq>
+Authorization: Bearer <agent token>
+```
+
+`Last-Event-ID: <roomId>:<seq>` may replace `cursor`. The previous
+multiplexed `/a2a/events` stream is removed. Before any stream headers are
+sent, the request is rejected with 400 for a missing room, a malformed,
+negative, unsafe or future cursor, or a Last-Event-ID from another room, and
+with 410 when the cursor has expired (resynchronize through `read_events`).
+
+Frames, in order:
+
+1. `hello` — `{ version: 2, roomId, cursor, highWater }`.
+2. Replay of every visible event above the cursor, paged up to the
+   `highWater` captured at connect time. Each frame has `id: <roomId>:<seq>`.
+3. `ready` — `{ cursor }`, then live events. Events created during replay are
+   buffered (up to 1,000) and flushed without a gap; a transport event may
+   repeat, so consumers deduplicate by event ID.
+4. `closed` — `{ reason, cursor }` where reason is `access-ended`,
+   `overflow`, `cursor-expired` or `error`.
+
+Every write rechecks credential validity and expiry, membership, incarnation,
+archive state and audience. Removal, revocation, archive and expiry close the
+stream at once and drop buffered payloads; bytes already sent cannot be
+recalled. A slow consumer whose buffer fills is disconnected (`overflow`)
+rather than growing memory. The stream is served only on the agent origin and
+never carries owner data.
 
 ### Claim reconciliation
 

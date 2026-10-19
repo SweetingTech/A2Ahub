@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EventJournal, messageEvent } from "../server/events.js";
+import { EventJournal } from "../server/events.js";
+import { messageEvent } from "../server/event-sync.js";
 import { DispatchBroker } from "../server/dispatch.js";
 
 test("Phase 2 A: EventJournal pub/sub notifies subscribers on append", () => {
@@ -35,14 +36,14 @@ test("Phase 2 C: acknowledge_events tracks per-recipient cursor", () => {
   const journal = new EventJournal({ now: () => 100000 });
   journal.append({ type: "message.created", roomId: "r1", senderId: "owner", payload: {} });
   journal.append({ type: "message.completed", roomId: "r1", senderId: "agent1", payload: {} });
-  assert.equal(journal.getCursor("agent1", "r1"), 0);
-  journal.acknowledge("agent1", "r1", 2);
-  assert.equal(journal.getCursor("agent1", "r1"), 2);
+  assert.equal(journal.getCursor("agent1", "r1", 1), 0);
+  journal.acknowledge("agent1", "r1", 1, 2);
+  assert.equal(journal.getCursor("agent1", "r1", 1), 2);
   // Acknowledging a lower cursor does not regress.
-  journal.acknowledge("agent1", "r1", 1);
-  assert.equal(journal.getCursor("agent1", "r1"), 2);
+  journal.acknowledge("agent1", "r1", 1, 1);
+  assert.equal(journal.getCursor("agent1", "r1", 1), 2);
   // Different agent has independent cursor.
-  assert.equal(journal.getCursor("agent2", "r1"), 0);
+  assert.equal(journal.getCursor("agent2", "r1", 1), 0);
 });
 
 test("Phase 2 D: reconcile_claim returns interrupted for gone job after restart", () => {

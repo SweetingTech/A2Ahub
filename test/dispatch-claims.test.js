@@ -129,3 +129,32 @@ test("removed and re-added membership starts a fresh native context", async (t) 
   assert.notEqual(fresh.contextId, first.contextId);
   assert.equal((await turn(fresh)).contextId, fresh.contextId);
 });
+
+test("a connector still reporting busy after its claim settled is not parked in a long poll", async (t) => {
+  const { broker, poll, report } = setup(t, { pollMs: 5000 });
+  await poll();
+  const pending = broker.send(agent, "first", {}, undefined, () => {}, {
+    roomId: "room-a",
+  });
+  const first = (await poll()).dispatch;
+  await report(first);
+  await pending;
+  // The connector's local turn has not cleared yet, so it polls as busy.
+  const started = Date.now();
+  const busy = await broker.next(account, {
+    connectorId: "connector-a",
+    available: false,
+  });
+  assert.ok(
+    Date.now() - started < 1000,
+    "settled busy poll waited a full long poll",
+  );
+  assert.equal(busy.dispatch, null);
+  const next = broker.send(agent, "second", {}, undefined, () => {}, {
+    roomId: "room-a",
+  });
+  const second = (await poll({ waitMs: undefined })).dispatch;
+  assert.ok(second, "queued work was not claimed by the next poll");
+  await report(second);
+  await next;
+});

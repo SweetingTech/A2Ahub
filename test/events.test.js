@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventJournal, messageEvent, digestContent, RETENTION_MS } from "../server/events.js";
+import { EventJournal, digestContent, RETENTION_MS } from "../server/events.js";
+import { messageEvent } from "../server/event-sync.js";
 
 test("EventJournal appends and reads events by room sequence cursor", () => {
   const j = new EventJournal({ now: () => 1000 });
@@ -47,9 +48,13 @@ test("EventJournal returns resyncRequired when cursor points to expired event", 
   j.retentionMs = RETENTION_MS;
   j.append({ type: "message.created", roomId: "r1", messageId: "m2" });
   assert.equal(j.events.length, 1);
-  const r = j.read("r1", 1);
+  const r = j.read("r1", 0);
   assert.equal(r.resyncRequired, true);
+  assert.equal(r.oldestSeq, 2);
   assert.equal(r.events.length, 0);
+  const caughtUp = j.read("r1", 1);
+  assert.equal(caughtUp.resyncRequired, false);
+  assert.equal(caughtUp.events[0].messageId, "m2");
 });
 
 test("completion receipt is idempotent by content digest and rejects conflicts", () => {
@@ -78,33 +83,33 @@ test("per-recipient cursors track and acknowledge progress", () => {
   const j = new EventJournal();
   j.append({ type: "message.created", roomId: "r1", messageId: "m1" });
   j.append({ type: "message.created", roomId: "r1", messageId: "m2" });
-  assert.equal(j.getCursor("agent-a", "r1"), 0);
-  j.acknowledge("agent-a", "r1", 1);
-  assert.equal(j.getCursor("agent-a", "r1"), 1);
-  j.acknowledge("agent-a", "r1", 0);
-  assert.equal(j.getCursor("agent-a", "r1"), 1);
+  assert.equal(j.getCursor("agent-a", "r1", 1), 0);
+  j.acknowledge("agent-a", "r1", 1, 1);
+  assert.equal(j.getCursor("agent-a", "r1", 1), 1);
+  j.acknowledge("agent-a", "r1", 1, 0);
+  assert.equal(j.getCursor("agent-a", "r1", 1), 1);
+  assert.equal(j.getCursor("agent-a", "r1", 2), 0);
 });
 
 test("EventJournal serializes and restores from JSON", () => {
   const j = new EventJournal();
   j.append({ type: "message.created", roomId: "r1", messageId: "m1" });
   j.recordCompletion({ dispatchId: "d1", text: "Reply", state: "completed" });
-  j.acknowledge("a", "r1", 1);
+  j.acknowledge("a", "r1", 1, 1);
   const restored = EventJournal.fromJSON(j.toJSON());
   assert.equal(restored.read("r1", 0).events.length, 1);
   assert.equal(restored.getCompletion("d1").text, "Reply");
-  assert.equal(restored.getCursor("a", "r1"), 1);
+  assert.equal(restored.getCursor("a", "r1", 1), 1);
 });
 
 test("messageEvent builds correct event type from message state", () => {
-  const room = { id: "r1", agentIds: ["a", "b"], membershipGeneration: 1 };
+  const room = { id: "r1", agentIds: ["a", "b"] };
   const created = messageEvent(
     { id: "m1", role: "user", name: "You", text: "Hi", state: "sent" },
     { room },
   );
   assert.equal(created.type, "message.created");
   assert.deepEqual(created.audience, ["a", "b"]);
-  assert.equal(created.membershipGeneration, 1);
   const working = messageEvent(
     { id: "m2", role: "agent", name: "A", text: "", state: "working", agentId: "a" },
     { room },

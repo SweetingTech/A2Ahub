@@ -1,0 +1,152 @@
+/* Settings pages. */
+/* Settings */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.settings-tabs {
+  align-self: flex-start;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.settings-tabs button {
+  flex: 0 0 auto;
+}
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 76rem;
+}
+.settings-card {
+  padding: 1.5rem;
+}
+.settings-card h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.1875rem;
+}
+.settings-card form {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+.settings-card label,
+.modal label {
+  font-size: 0.875rem;
+  font-weight: 550;
+}
+.settings-card .primary,
+.token-form .primary {
+  justify-self: start;
+}
+.success-notice {
+  color: var(--ok-ink) !important;
+}
+.notice-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 10px;
+  background: var(--ok-soft);
+  margin: 0 0 1rem;
+}
+.hint {
+  font-size: 0.8125rem !important;
+  color: var(--muted) !important;
+}
+.card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.card-heading h2,
+.card-heading h3 {
+  margin: 0;
+}
+.check-label {
+  display: flex !important;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.875rem;
+  font-weight: 450 !important;
+  cursor: pointer;
+}
+.check-label input,
+.choice input,
+.theme-card input,
+.library-table input[type="checkbox"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  min-height: 0;
+  accent-color: var(--accent);
+}
+.appearance-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: 1.25rem;
+  align-items: start;
+}
+.appearance-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.9rem;
+}
+.theme-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  border: var(--border-w) solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.theme-card input {
+  position: absolute;
+  opacity: 0;
+}
+.theme-card.chosen {
+  border: 3px solid var(--accent);
+  padding: calc(0.6rem - 2px);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.theme-card:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.theme-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.theme-name strong {
+  font-size: 0.9375rem;
+}
+.theme-name small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.theme-badge {
+  position: absolute;
+  top: -0.7rem;
+  left: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: #0b3d91;
+  color: #ffffff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+}

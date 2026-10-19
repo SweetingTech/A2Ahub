@@ -1,17 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EventJournal, messageEvent, RETENTION_MS } from "../server/events.js";
+import { EventJournal, RETENTION_MS } from "../server/events.js";
+import { messageEvent } from "../server/event-sync.js";
 import { DispatchBroker } from "../server/dispatch.js";
 
 test("Phase 5 A: Event journal survives serialization round-trip", () => {
   const journal = new EventJournal({ now: () => 100000 });
   journal.append({ type: "message.created", roomId: "r1", senderId: "owner", payload: { text: "hello" } });
   journal.append({ type: "message.completed", roomId: "r1", senderId: "agent1", payload: { text: "reply" } });
-  journal.acknowledge("agent1", "r1", 2);
+  journal.acknowledge("agent1", "r1", 1, 2);
   const json = journal.toJSON();
   const restored = EventJournal.fromJSON(json);
   assert.equal(restored.events.length, 2);
-  assert.equal(restored.getCursor("agent1", "r1"), 2);
+  assert.equal(restored.getCursor("agent1", "r1", 1), 2);
   assert.equal(restored.latestSeq("r1"), 2);
   // Verify events are still readable
   const read = restored.read("r1", 0);
@@ -83,9 +84,8 @@ test("Phase 5 E: Event journal resync detection", () => {
   journal2.retentionMs = 0;
   // With a cursor pointing to an expired event, resync should be required
   // (empty journal, cursor > 0)
-  const read2 = journal2.read("r1", 1);
-  // Empty journal returns no events and no resync (oldest is undefined)
-  assert.equal(read2.events.length, 0);
+  // A cursor beyond this journal's high-water mark is rejected explicitly.
+  assert.throws(() => journal2.read("r1", 1), (e) => e.status === 400);
 });
 
 test("Phase 5 F: RETENTION_MS is 7 days", () => {
@@ -93,7 +93,7 @@ test("Phase 5 F: RETENTION_MS is 7 days", () => {
 });
 
 test("Phase 5 G: messageEvent builder handles all message states", () => {
-  const room = { id: "r1", agentIds: ["a1", "a2"], membershipGeneration: 1 };
+  const room = { id: "r1", agentIds: ["a1", "a2"] };
   const created = messageEvent(
     { id: "m1", role: "user", text: "hello", state: "sent", recipientIds: ["a1", "a2"] },
     { room },

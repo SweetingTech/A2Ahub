@@ -13,6 +13,7 @@ export function mountAgentListener(ctx) {
     chat,
     audit,
     journal,
+    gate,
     origin,
     onPost,
     mountInbound,
@@ -86,6 +87,7 @@ export function mountAgentListener(ctx) {
     broker,
     onPost,
     journal,
+    gate,
   });
   mountSseEvents(remote);
   remote.use((req, res) =>

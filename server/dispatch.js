@@ -112,18 +112,31 @@ export class DispatchBroker {
 
   // Authenticated claim-status reconciliation: a surviving session receiver
   // whose claim disappeared after a Hub restart can query its status.
-  // Returns { state: "interrupted" | "uncertain" | "valid" | "unknown" }.
+  // Returns { state: "completed" | "reported" | "interrupted" | "uncertain"
+  // | "valid" | "unknown" }. A durable receipt always wins, so a completed
+  // report is never mislabeled uncertain after a lost acknowledgment.
   reconcileClaim(accountId, dispatchId) {
+    const receipt = this.journal?.getCompletion(dispatchId, accountId);
+    if (receipt)
+      return {
+        state: "completed",
+        receipt: {
+          dispatchId,
+          state: receipt.state,
+          acceptedAt: receipt.acceptedAt,
+          contentDigest: receipt.contentDigest,
+        },
+      };
     const job = this.jobs.get(dispatchId);
     if (!job) {
       // The job is gone: it was interrupted by the restart.
       return { state: "interrupted", epoch: this.epoch };
     }
-    if (job.accountId !== accountId)
-      return { state: "unknown" };
+    if (job.accountId !== accountId) return { state: "unknown" };
     if (job.state === "claimed") return { state: "valid" };
     if (job.state === "canceled") return { state: "interrupted" };
-    if (job.state === "done" || job.state === "interrupted") return { state: "uncertain" };
+    if (job.state === "done") return { state: "reported" };
+    if (job.state === "interrupted") return { state: "uncertain" };
     return { state: "valid" };
   }
 
@@ -135,7 +148,11 @@ export class DispatchBroker {
       job.state = "interrupted";
       job.finished = this.now();
       job.cleanup();
-      job.reject(new Error("Claim interrupted by Hub restart. Remote work may continue; it was not retried."));
+      job.reject(
+        new Error(
+          "Claim interrupted by Hub restart. Remote work may continue; it was not retried.",
+        ),
+      );
       this.wake(accountId);
     }
   }
@@ -381,7 +398,14 @@ export class DispatchBroker {
       };
     };
     let result = take();
-    if (!result && command.waitMs !== 0) {
+    // A connector that still reports itself busy after its claim already
+    // finished would otherwise sleep a full long poll with no wake pending.
+    const settledBusy =
+      command.available === false &&
+      ![...this.jobs.values()].some(
+        (job) => job.accountId === accountId && job.state === "claimed",
+      );
+    if (!result && command.waitMs !== 0 && !settledBusy) {
       await new Promise((resolve) => {
         const timer = setTimeout(resolve, this.pollMs);
         this.waiters.set(accountId, {
@@ -398,7 +422,7 @@ export class DispatchBroker {
     this.peers.get(accountId).seen = this.now();
     return {
       ...(result || { dispatch: null, cancellations: [] }),
-      pollAfterMs: 250,
+      pollAfterMs: settledBusy ? 1000 : 250,
     };
   }
 
