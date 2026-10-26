@@ -51,6 +51,9 @@ const hubEpoch = Date.now();
 const headless =
   process.argv.includes("--headless") ||
   /^(1|true|yes)$/i.test(process.env.A2AHUB_HEADLESS || "");
+// Docker publishes the owner listener on the host's loopback interface. Native
+// launches keep the direct loopback bind; Host and Origin checks stay unchanged.
+const ownerHost = process.env.A2AHUB_DOCKER === "1" ? "0.0.0.0" : "127.0.0.1";
 
 fs.mkdirSync(dataDir, { recursive: true });
 const now = hubClock(dataDir);
@@ -377,7 +380,16 @@ const routeCtx = {
 
 mountAuthRoutes(routeCtx);
 mountSseEvents(app);
-mountInbound(app, { access, db, publish, origin, broker, onPost, journal, gate });
+mountInbound(app, {
+  access,
+  db,
+  publish,
+  origin,
+  broker,
+  onPost,
+  journal,
+  gate,
+});
 mountStateRoutes(routeCtx);
 mountRoomRoutes(routeCtx);
 mountFolderRoutes(routeCtx);
@@ -427,7 +439,7 @@ if (headless) {
   });
   app.use(vite.middlewares);
 }
-const server = app.listen(port, "127.0.0.1", () =>
+const server = app.listen(port, ownerHost, () =>
   console.log(
     headless
       ? `A2Ahub headless API ready at ${origin}/api/v1 (no web interface)`

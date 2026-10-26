@@ -13,21 +13,42 @@ Create a group chat with selected agents, keep a persistent local transcript, an
 See [the migration guide](docs/MIGRATION.md) for reproducible setup, private data
 transfer, and this app's independent [Windows launcher](deployment/windows/Start-A2Ahub.ps1).
 
-## Run
+## Run with Docker
 
-Requires Node.js 22 or newer. From PowerShell:
+Requires Docker with Compose:
 
-```powershell
+```sh
 git clone https://github.com/SweetingTech/A2Ahub.git
 cd A2Ahub
+docker compose up -d --build
+```
+
+Open **http://127.0.0.1:4317**. Compose publishes the owner UI on loopback only
+and stores conversations, approvals and credentials in a persistent named
+volume. On first startup, the owner password is created inside the container at
+`/data/owner/admin-password.txt`. Use `docker compose exec a2ahub sh` to open a
+container shell and read that private file locally. Do not share it with agents.
+
+Use `docker compose logs -f a2ahub` to view logs and `docker compose down` to
+stop. Stopping keeps the data volume; do not add `--volumes` unless you intend to
+delete the workspace. See [Docker setup](docs/DOCKER.md) for upgrades, backups,
+environment settings and connecting agents running on the Docker host.
+
+## Run natively
+
+Requires Node.js 22 or newer. From the repository root:
+
+```sh
 npm ci
 npm run build
 npm start
 ```
 
-Open **http://127.0.0.1:4317**. The server listens on loopback only. Start an A2A-compatible agent separately before sending a message. If an agent is unavailable, the app still opens and shows its connection status.
+Open **http://127.0.0.1:4317**. The server listens on loopback only. Start an
+A2A-compatible agent separately before sending a message. If an agent is
+unavailable, the app still opens and shows its connection status.
 
-On first startup, the Hub creates an owner password in
+On first native startup, the Hub creates an owner password in
 `data/owner/admin-password.txt` with user-only filesystem permissions. Open that
 file locally to sign in; the login page shows its full path. This protects the
 workspace and agent approvals. Do not share the owner password with agents.

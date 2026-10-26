@@ -32,6 +32,7 @@ const BrandMark = ({ size = 22 }) => (
 export function PageRouter({
   // banner / routing
   online,
+  busy,
   error,
   modal,
   picker,
@@ -190,8 +191,7 @@ export function PageRouter({
           onLogout={() =>
             action(async () => {
               const r = await fetch("/auth/logout", { method: "POST" });
-              if (!r.ok)
-                throw new Error("Sign-out failed. Please try again.");
+              if (!r.ok) throw new Error("Sign-out failed. Please try again.");
               window.dispatchEvent(new Event("a2ahub-auth-required"));
             })
           }
