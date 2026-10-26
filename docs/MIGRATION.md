@@ -94,6 +94,23 @@ Session receivers (`scripts/session-runtime.mjs`) now call `reconcile_claim`
 on every poll cycle, not just after transport errors. This detects Hub
 restarts proactively before accepting new work.
 
+## Deployment and remote-listener settings
+
+Preserve deployment settings separately from runtime data. Relevant values include
+`PORT`, `A2AHUB_DATA_DIR`, `A2AHUB_AGENT_PORT`, `A2AHUB_AGENT_HOST`,
+`A2AHUB_PUBLIC_URL` and optional `A2AHUB_AGENT_ORIGINS`. Docker LAN mode uses
+`A2AHUB_LAN_URL`, `A2AHUB_LAN_ALIASES`, `A2AHUB_LAN_BIND` and
+`A2AHUB_LAN_PORT`; keep those values in the ignored `.env`, not in Git.
+
+When upgrading or moving a LAN-enabled Docker installation, start it with both
+`compose.yaml` and `compose.lan.yaml`. The base command alone leaves the agent
+listener unpublished after recreation. Owner UI and admin settings stay on
+loopback in either mode.
+
+Connector credentials are keyed by Hub origin and agent name. Changing the
+canonical LAN URL can require explicit reauthorization on each agent computer.
+Do not copy private connector credentials into the repository or image.
+
 ## Gateway tests
 
 `npm run test:integration:gateway` starts a real disposable Hub process

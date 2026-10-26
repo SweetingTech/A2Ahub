@@ -1,0 +1,11 @@
+# Opt in with: docker compose -f compose.yaml -f compose.lan.yaml up -d --build
+# A2AHUB_LAN_URL is required in .env (or via --env-file).
+services:
+  a2ahub:
+    ports:
+      - "${A2AHUB_LAN_BIND:-0.0.0.0}:${A2AHUB_LAN_PORT:-4318}:4318"
+    environment:
+      A2AHUB_AGENT_PORT: 4318
+      A2AHUB_AGENT_HOST: 0.0.0.0
+      A2AHUB_PUBLIC_URL: ${A2AHUB_LAN_URL:?Set A2AHUB_LAN_URL to the Hub's LAN agent origin}
+      A2AHUB_AGENT_ORIGINS: ${A2AHUB_LAN_ALIASES:-}

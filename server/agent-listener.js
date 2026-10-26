@@ -4,6 +4,22 @@ import express from "express";
 // owner routes. The configured public origin is explicit so neither Host nor
 // proxy headers can rewrite approval links or the authenticated A2A endpoint
 // advertised by the card.
+function agentOrigin(value) {
+  const url = new URL(value);
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(
+      "Agent listener origins must be HTTP(S) URLs without credentials or a path.",
+    );
+  return url;
+}
+
 export function mountAgentListener(ctx) {
   const {
     access,
@@ -24,29 +40,33 @@ export function mountAgentListener(ctx) {
   if (!process.env.A2AHUB_AGENT_PORT) return;
 
   const agentPort = Number(process.env.A2AHUB_AGENT_PORT);
-  const publicUrl = new URL(
-    process.env.A2AHUB_PUBLIC_URL || `http://127.0.0.1:${agentPort}`,
-  );
   if (
     !Number.isInteger(agentPort) ||
     agentPort < 1 ||
     agentPort > 65535 ||
-    agentPort === port ||
-    !["http:", "https:"].includes(publicUrl.protocol) ||
-    publicUrl.username ||
-    publicUrl.password ||
-    publicUrl.pathname !== "/" ||
-    publicUrl.search ||
-    publicUrl.hash
+    agentPort === port
   )
-    throw new Error(
-      "Configure a distinct A2AHUB_AGENT_PORT and an HTTP(S) A2AHUB_PUBLIC_URL origin.",
-    );
+    throw new Error("Configure a distinct A2AHUB_AGENT_PORT (1–65535).");
+  const publicUrl = agentOrigin(
+    process.env.A2AHUB_PUBLIC_URL || `http://127.0.0.1:${agentPort}`,
+  );
+  const allowedOrigins = new Map();
+  for (const value of [
+    publicUrl.href,
+    ...(process.env.A2AHUB_AGENT_ORIGINS || "")
+      .split(",")
+      .filter((value) => value.trim()),
+  ]) {
+    const origin = agentOrigin(value.trim());
+    allowedOrigins.set(origin.host.toLowerCase(), origin.origin);
+  }
   const remote = express();
   remote.use((req, res, next) => {
+    const host = String(req.headers.host || "").toLowerCase();
+    const expectedOrigin = allowedOrigins.get(host);
     if (
-      req.headers.host !== publicUrl.host ||
-      (req.headers.origin && req.headers.origin !== publicUrl.origin)
+      !expectedOrigin ||
+      (req.headers.origin && req.headers.origin !== expectedOrigin)
     )
       return res.status(403).json({ error: "Agent origin is not allowed." });
     res.set({
