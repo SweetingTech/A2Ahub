@@ -193,6 +193,26 @@ The `mock=1` flag provides a mock contract fallback for pipeline testing
 without a live model endpoint. The mock contract is available via
 `/api/rooms/:id/room-link?mock=1`.
 
+## Remote agent listener
+
+A native installation can explicitly expose only device bootstrap, the agent
+card and authenticated A2A on a separate port:
+
+```sh
+A2AHUB_AGENT_PORT=4318
+A2AHUB_AGENT_HOST=0.0.0.0
+A2AHUB_PUBLIC_URL=http://192.168.1.50:4318
+# Optional comma-separated complete origin aliases:
+A2AHUB_AGENT_ORIGINS=http://HUBHOST:4318
+```
+
+The canonical URL and aliases reject credentials, paths, unknown Host values
+and mismatched Origins. The owner UI and administrative API remain on the
+loopback owner listener and are never mounted here. Use HTTP only on a trusted
+LAN; it does not encrypt bearer credentials or message content. Docker users
+should follow [LAN agent setup](DOCKER.md#allow-lan-agents) instead of manually
+publishing the owner port.
+
 ## Connector retry
 
 The connector uses bounded exponential backoff (1s initial, doubling, max 30s)

@@ -89,3 +89,25 @@ Checked against the mock fixture in headless Chromium at 5120 × 1440 (full, 256
 and 1920), 3440 × 1440, 1440 × 960 and 390 × 844. No horizontal overflow at any
 size, the room menu still opens beside its button when the app is centered, and
 there were no console errors. Not checked on the physical monitor.
+
+## Docker production UI and LAN agent listener (2026-10-26)
+
+The production Docker image was built and exercised in headless Chrome at
+1440 × 960 and 390 × 844 against the running container. Login and the Shared
+workspace rendered after the automatic JSX runtime and center-column fixes.
+Library, Agents, Access, Admin, Settings and Appearance also rendered. The mobile
+conversation drawer opened and closed with Escape, no horizontal overflow was
+reported, and there were no browser runtime errors or failed asset requests.
+The final screenshot showed the rail, conversation sidebar, center chat/composer
+and right details panel in their intended columns.
+
+A separate disposable Compose project used the host's real LAN interface and a
+hostname alias. It verified the agent card, device bootstrap, unknown-Host
+rejection, exact alias Origin handling, 404 owner routes on the agent port, and
+an owner UI reachable through loopback but not the LAN address. The data volume
+survived recreation. The disposable project and volume were removed.
+
+Coverage limits: LAN checks ran from the same physical Windows host, not a second
+computer. Approval, dispatch and reply checks used disposable mock identities;
+no live model request or actual multi-computer conversation was performed. The
+Windows firewall rule was documented but not changed by the verification.

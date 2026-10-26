@@ -19,11 +19,14 @@ A2Ahub is a single-user, local A2A chat client and conversation coordinator. The
 - `test/chat.test.js`: scheduler tests for concurrency, request limits, audience boundaries, Continue, and Stop.
 - `server/access.js`, `server/inbound.js`: owner login, device approval, scoped inbound A2A read/post access, manager tokens.
 - `server/audit.js`: audit log of administrative actions.
+- `server/agent-listener.js`: optional agent-only listener with exact canonical and alias origin validation; never mounts owner routes.
+- `Dockerfile`, `compose.yaml`, `compose.lan.yaml`, `docs/DOCKER.md`: non-root production image, persistent local deployment and opt-in LAN agent access.
 - `scripts/a2ahub.mjs`: manager CLI for the loopback owner API (full or headless).
 - `scripts/a2a-client.mjs`: private device-authorization client and A2A read/post helper.
 - `scripts/a2a-connect.mjs`, `server/dispatch.js`: outbound agent connector and single-claim dispatch broker.
 - `scripts/a2a-session.mjs`, `scripts/session-runtime.mjs`, `scripts/adapters/`: existing Codex conversation queue, opted-in Claude Code channel and Windows Hermes Desktop gateway attachment; private receipt journal and loopback control helper.
-- `test/workflow.test.js`, `test/dispatch.test.js`: reusable-agent, history, remote-listener, and dispatch regressions.
+- `test/workflow.test.js`, `test/dispatch-*.test.js`: reusable-agent, history, remote-listener, and dispatch regressions.
+- `test/agent-listener.test.js`: agent alias origins, Host/Origin rejection and owner-route isolation.
 - `test/admin.test.js`, `test/appearance.test.js`: headless mode, manager-token scopes, folders, archive, admin, CLI and theme logic.
 
 ## Behavioral constraints

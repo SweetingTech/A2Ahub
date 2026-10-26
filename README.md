@@ -74,6 +74,14 @@ Once it appears online, add it to a chat and send a message. It receives work ov
 an outbound A2A connection to the Hub; it does not need an incoming network port.
 The agent's own local A2A endpoint must be running. A closed CLI needs an adapter.
 
+For agents on **other computers in a trusted LAN**, Docker has an opt-in agent
+listener on port 4318. Set `A2AHUB_LAN_URL` in `.env`, then start with
+`docker compose -f compose.yaml -f compose.lan.yaml up -d --build`. Only agent
+bootstrap and authenticated A2A routes are exposed; the owner UI and admin API
+stay on loopback port 4317. See [LAN agent setup](docs/DOCKER.md#allow-lan-agents)
+for remote commands, optional hostname aliases, HTTP limitations and the Windows
+firewall rule.
+
 To connect a **conversation already open in Codex, Claude Code, or Hermes Desktop
 on Windows**, open **Agents**,
 choose **Connect an open conversation**, and copy its setup prompt into that exact
@@ -101,6 +109,7 @@ Stop a foreground server with Ctrl+C. On Windows, `./stop.ps1` can stop a backgr
 
 ## Documentation
 
+- [Docker setup](docs/DOCKER.md): local deployment, persistent data, upgrades, backups and opt-in LAN agent access.
 - [Agent setup and the A2A contract](docs/AGENT-ACCESS.md): approval, event reads, acknowledgments, the version 2 event stream, receipts and existing-conversation receivers.
 - [Migration guide](docs/MIGRATION.md): setup, data upgrades and the event-stream version change.
 - [Continuous integration](docs/CI.md): what the GitHub checks run.
@@ -182,7 +191,7 @@ Registrations, room membership, reply settings, pause state, folders, pin and ar
 
 Outbound agent bearer tokens remain in server environment variables. The form accepts only the variable name, which must begin `A2AHUB_TOKEN_`. Set the real value privately in the environment used to start Node; never paste it into chat or an endpoint URL. Restart the server after environment changes. The app does not read or modify Hermes configuration. Registrations store the variable name, never its value. Redirects and cross-origin advertised endpoints are rejected to avoid forwarding credentials unexpectedly. Inbound credentials are separate: the Hub stores their hashes in private `data/owner/access.json`, and the requesting client stores its credential outside the repository.
 
-`PORT` changes the owner's local port; `A2AHUB_DATA_DIR` changes the data directory. Defaults work without either variable. For agents on another computer, explicitly configure a separate agent-only listener using `A2AHUB_AGENT_PORT`, `A2AHUB_AGENT_HOST`, and `A2AHUB_PUBLIC_URL` as documented in [Agent setup](docs/AGENT-ACCESS.md). The owner's login and administrative APIs remain on loopback. Data, temporary work, dependencies, builds, and `.env` are git-ignored.
+`PORT` changes the owner's local port; `A2AHUB_DATA_DIR` changes the data directory. Defaults work without either variable. For agents on another computer, explicitly configure a separate agent-only listener using `A2AHUB_AGENT_PORT`, `A2AHUB_AGENT_HOST`, and `A2AHUB_PUBLIC_URL`, with optional complete-origin aliases in `A2AHUB_AGENT_ORIGINS`, as documented in [Agent setup](docs/AGENT-ACCESS.md). Docker users can instead use the [opt-in LAN Compose override](docs/DOCKER.md#allow-lan-agents). The owner's login and administrative APIs remain on loopback. Data, temporary work, dependencies, builds, and `.env` are git-ignored.
 
 ## Protocol scope and limitations
 
@@ -198,8 +207,8 @@ Implementation evidence: Hermes's installed `plugins/platforms/a2a/protocol.py`,
 
 ## Verification
 
-The chat workflow and existing-conversation adapters pass **88 automated tests** and the production build.
-Checks cover reusable approvals, separate room/history boundaries, removal and
+The chat workflow and existing-conversation adapters are covered by automated
+tests and production build checks. Checks cover reusable approvals, separate room/history boundaries, removal and
 re-addition, revocation, owner authentication, profile persistence, isolated remote
 agent routes, exactly-once dispatch claims, nonterminal progress, Stop, and the
 existing group-chat scheduler and A2A 1.0/0.3 transport.
@@ -227,7 +236,10 @@ fails or is canceled. Live discovery of the installed Desktop gateway succeeded;
 the end-to-end Desktop message test is pending selection of the owner's exact chat.
 
 Multiple live agents on separate household computers have not been verified.
-The protocol and remote listener are covered by local integration tests.
+The protocol and remote listener are covered by local integration tests. A
+same-host Docker LAN check also verified the LAN address and hostname alias,
+device bootstrap, exact Host/Origin enforcement and owner-route isolation. This
+is not evidence of a second physical computer or a live model round trip.
 
 On 2026-09-25, the updated installed Windows app was restarted through its existing
 Startup launcher. In the owner's existing Chrome browser, an already-approved
@@ -262,6 +274,8 @@ Earlier visual verification notes are in [design/QA.md](design/QA.md). Real chat
 - `server/protocol.js`: agent discovery and A2A JSON-RPC transport.
 - `server/access.js`, `server/inbound.js`: owner approval and room-scoped A2A access.
 - `server/dispatch.js`: approved-connector presence, dispatch claims, and cancellation.
+- `server/agent-listener.js`: separate agent-only listener for explicitly configured remote access.
+- `Dockerfile`, `compose.yaml`, `compose.lan.yaml`: production image, local Docker deployment and opt-in LAN agent access.
 - `server/audit.js`: owner-visible audit log of administrative actions.
 - `scripts/a2ahub.mjs`: manager CLI for the owner API (works with headless mode).
 - `scripts/a2a-connect.mjs`: runs on an agent's computer to connect its native A2A endpoint.

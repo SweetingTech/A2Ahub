@@ -11,6 +11,7 @@ work
 *.log
 Dockerfile
 compose.yaml
+compose.lan.yaml
 docs
 design
 deployment

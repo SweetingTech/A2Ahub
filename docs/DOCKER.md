@@ -43,6 +43,10 @@ Restart the container after changing environment values:
 docker compose up -d --force-recreate
 ```
 
+When LAN mode is enabled, use the combined LAN command from the next section
+for every recreate or upgrade; running the base command alone disables the LAN
+listener on the next container recreation.
+
 Set `A2AHUB_PORT` to change only the host port, for example
 `A2AHUB_PORT=54317 docker compose up -d`. Then open that port on `127.0.0.1`.
 The container's internal port remains 4317.
@@ -51,6 +55,61 @@ The default owner URL and separate agent-listener options are otherwise the
 same as a native installation. Do not expose the owner listener publicly. For a
 separate agent-only listener, follow [Agent access](AGENT-ACCESS.md) and add an
 explicit, appropriately secured port mapping only when required.
+
+## Allow LAN agents
+
+Use this only on a trusted local network. The agent listener uses HTTP by
+default, so bearer credentials and message content are not encrypted in transit.
+Do not expose it to the internet, guest Wi-Fi or an untrusted shared network.
+
+The opt-in `compose.lan.yaml` override publishes **only the agent listener** on
+port 4318. The owner UI and administrative API remain on loopback port 4317.
+Create or edit the ignored `.env` file and set the Hub computer's reachable LAN
+address (replace this example IP):
+
+```dotenv
+A2AHUB_LAN_URL=http://192.168.1.50:4318
+# Optional comma-separated aliases, each a complete origin:
+A2AHUB_LAN_ALIASES=http://HUBHOST:4318
+```
+
+Start with both Compose files; use this same command for later rebuilds:
+
+```sh
+docker compose -f compose.yaml -f compose.lan.yaml up -d --build
+```
+
+`A2AHUB_LAN_BIND` defaults to `0.0.0.0`, making the agent port reachable through
+the host's LAN interfaces. `A2AHUB_LAN_PORT` changes the external host port;
+the container's agent listener remains on 4318. If you change the port, update
+`A2AHUB_LAN_URL`, every alias and the firewall rule to match. Omitting the LAN
+override leaves the agent listener unpublished and disabled.
+
+On Windows, allow only the required port and your actual local subnet. Run the
+following in an **elevated** PowerShell after replacing the example subnet:
+
+```powershell
+New-NetFirewallRule -DisplayName "A2Ahub agents (TCP 4318)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 4318 -RemoteAddress 192.168.1.0/24 -Profile Public,Private
+```
+
+On each agent computer, install Node.js 22 or newer, make the repository and
+production dependencies available with `npm ci --omit=dev`, then run:
+
+```powershell
+node scripts/a2a-connect.mjs --name LaptopAgent --url http://192.168.1.50:4318 --endpoint http://127.0.0.1:9900/
+```
+
+Here `127.0.0.1:9900` correctly means the agent's own computer. The agent needs
+no incoming port. Send the printed verification code to the owner; the owner
+compares and approves it in the UI on the Hub computer. Approval links still
+point to the local owner UI and are not available on the LAN listener.
+
+The canonical URL and every alias must include the externally reachable port.
+Unknown Host or Origin values are rejected. Owner routes return 404 on the agent
+port even if an owner cookie or manager token is supplied. Agent credentials
+remain scoped, expiring and revocable. Docker network translation can make
+several remote agents share one source IP for the approval-request rate limit;
+normal dispatch traffic is not affected by that limit.
 
 ## Connect agents
 
@@ -73,6 +132,13 @@ Upgrade without deleting the data volume:
 ```sh
 git pull --ff-only
 docker compose up -d --build
+```
+
+For a LAN-enabled installation, run the same pull and then rebuild with both
+files instead of the base command:
+
+```sh
+docker compose -f compose.yaml -f compose.lan.yaml up -d --build
 ```
 
 Back up the named volume while the Hub is stopped. At minimum, preserve the
